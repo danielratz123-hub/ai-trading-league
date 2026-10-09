@@ -3,6 +3,8 @@
 Run locally:   python -m arena.main serve        -> http://127.0.0.1:8000
 Every endpoint is GET and opens the database read-only, except the two
 admin actions (pause / resume), which need the ADMIN_TOKEN from .env.
+Everything except /login and /healthz needs a signed-in session when a
+dashboard password is set, and always on the server (see auth.py).
 """
 from __future__ import annotations
 
@@ -20,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from .. import health, league, ledger
 from ..config import SETTINGS
 from ..db import connect
-from . import control, live, queries
+from . import auth, control, live, queries
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
@@ -60,6 +62,7 @@ def _agent(conn, agent_id: str) -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    auth.check_config()            # on the server: refuse to start without a password / admin token
     control.autostart_scheduler()
     live.LIVE = live.LivePrices(db_path)
     live.LIVE.start()              # live prices for the dashboard, market hours only
@@ -71,9 +74,14 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     app = FastAPI(title="AI Trading League", docs_url="/api/docs", openapi_url="/api/openapi.json",
                   lifespan=lifespan)
-    origins = [o.strip() for o in os.getenv("DASHBOARD_ORIGINS", "*").split(",") if o.strip()]
-    app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST"],
-                       allow_headers=["Authorization"])
+    # The dashboard is served by this same app, so no cross-site access is
+    # needed. DASHBOARD_ORIGINS can still allow specific sites (not "*").
+    origins = [o.strip() for o in os.getenv("DASHBOARD_ORIGINS", "").split(",") if o.strip() and o.strip() != "*"]
+    if origins:
+        app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST"],
+                           allow_headers=["Authorization"])
+    app.middleware("http")(auth.require_login)
+    app.include_router(auth.router)
 
     @app.middleware("http")
     async def no_index(request, call_next):

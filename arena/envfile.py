@@ -92,7 +92,13 @@ def set_values(updates: dict[str, str], path: Path | None = None) -> None:
     lines += [f"{k}={v}" for k, v in updates.items() if k not in done]
     tmp = path.with_suffix(".tmp")
     tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    tmp.replace(path)                     # atomic: never a half-written .env
+    try:
+        tmp.replace(path)                 # atomic: never a half-written .env
+    except OSError:
+        # On the server .env is a single file mounted into the container,
+        # which can't be replaced by a rename; write it in place instead.
+        path.write_text(tmp.read_text(encoding="utf-8"), encoding="utf-8")
+        tmp.unlink(missing_ok=True)
     for k, v in updates.items():
         os.environ[k] = v
 

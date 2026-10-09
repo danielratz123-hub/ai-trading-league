@@ -203,9 +203,14 @@ SCHEDULER = SchedulerProcess()
 _AGENT_CHECK: dict = {}
 
 
+def server_mode() -> bool:
+    """On the VPS the engine container runs the scheduler; this page only shows it."""
+    return os.getenv("ARENA_SERVER", "0") == "1"
+
+
 def autostart_scheduler() -> None:
     """Called when the server starts: resume the scheduler if you asked for it."""
-    if not control_enabled() or os.getenv("AUTOSTART_SCHEDULER", "0") != "1":
+    if server_mode() or not control_enabled() or os.getenv("AUTOSTART_SCHEDULER", "0") != "1":
         return
     if Path(db_path()).exists():
         conn = connect(db_path())
@@ -252,7 +257,7 @@ def state():
         "env": envfile.describe(),
         "league": _league_state(),
         "task": TASKS.state(),
-        "scheduler": {"running": SCHEDULER.running()},
+        "scheduler": _scheduler_state(),
         "agents": _AGENT_CHECK,
         "now_et": now.strftime("%a %Y-%m-%d %H:%M"),
         "weekend": now.weekday() >= 5,
@@ -372,8 +377,19 @@ def task():
     return TASKS.state()
 
 
+def _scheduler_state() -> dict:
+    if server_mode():
+        from ..health import HEARTBEAT_STALE, heartbeat_age
+        age = heartbeat_age(db_path())
+        return {"running": age is not None and age < HEARTBEAT_STALE, "managed": "engine"}
+    return {"running": SCHEDULER.running()}
+
+
 @router.post("/scheduler/{what}")
 def scheduler(what: str):
+    if server_mode():
+        raise HTTPException(409, "On the server the engine container runs the scheduler: "
+                                 "docker compose restart engine / docker compose stop engine.")
     if what == "start":
         SCHEDULER.start()
     elif what == "stop":

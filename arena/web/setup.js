@@ -94,9 +94,14 @@ function render() {
 
   // 5. Scheduler
   const on = st.scheduler.running;
-  $("sched-status").innerHTML = on
+  const managed = st.scheduler.managed === "engine";   // on the VPS: the engine container
+  $("sched-status").innerHTML = managed
+    ? (on ? `<span class="pos">● Running</span> in the engine container.`
+          : `<span class="neg">● Not running.</span> On the server: <code>docker compose up -d engine</code>, then check <code>docker compose logs engine</code>.`)
+    : on
     ? `<span class="pos">● Running.</span> It will take care of everything from here.`
     : `<span class="neg">● Stopped.</span> ${L.started ? "Start it so the league keeps going." : "Start the league first."}`;
+  $("sched-start").hidden = $("sched-stop").hidden = $("autostart").parentElement.hidden = managed;
   $("sched-start").disabled = on || !L.started;
   $("sched-stop").disabled = !on;
   $("autostart").checked = env.AUTOSTART_SCHEDULER.value === "1";

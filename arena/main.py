@@ -27,6 +27,7 @@ League (times are US Eastern)
     pause / resume   stop / restart decide and execute
     app              the easy way: dashboard + setup page, opens your browser (start.cmd runs this)
     serve            run the dashboard + read-only API on http://127.0.0.1:8000
+    hash-password    make DASHBOARD_PASSWORD_HASH for the dashboard login (asks for the password)
     scheduler        run decide / execute / daily automatically on US market time
     health           quick check (database, disk; --scheduler: heartbeat too); exit 1 if unhealthy
     mirror           show (or with --apply, place) the paper-account orders that copy the leader
@@ -410,8 +411,27 @@ def cmd_serve(conn, args) -> None:
     import uvicorn
 
     os.environ["ARENA_DB"] = str(Path(args.db).resolve())
+    from .api.auth import ConfigError, check_config
+    try:
+        check_config()
+    except ConfigError as e:
+        sys.exit(str(e))
     print(f"Dashboard: http://{args.host}:{args.port}   (API docs at /api/docs)")
     uvicorn.run("arena.api.app:app", host=args.host, port=args.port, log_level="warning")
+
+
+def cmd_hash_password(conn, args) -> None:
+    import getpass
+
+    from .api.auth import hash_password
+    pw = getpass.getpass("Dashboard password (at least 12 characters): ")
+    if len(pw) < 12:
+        sys.exit("Too short: use at least 12 characters.")
+    if getpass.getpass("Type it again: ") != pw:
+        sys.exit("The two passwords don't match.")
+    h = hash_password(pw)
+    print("\nPut this line in .env (the $$ are needed by Docker Compose):\n")
+    print("DASHBOARD_PASSWORD_HASH=" + h.replace("$", "$$"))
 
 
 def cmd_tool(conn, args) -> None:
@@ -453,9 +473,10 @@ COMMANDS = {
     "scheduler": cmd_scheduler,
     "mirror": cmd_mirror,
     "tool": cmd_tool,
-    "health": None,          # handled in main() before the database is opened
+    "health": None,
+    "hash-password": cmd_hash_password,          # handled in main() before the database is opened
 }
-READ_ONLY = {"status", "tool", "check-agents", "init-db", "serve", "scheduler", "app"}
+READ_ONLY = {"status", "tool", "check-agents", "init-db", "serve", "scheduler", "app", "hash-password"}
 
 
 def _throwaway_copy(db: str, workdir: str) -> str:
@@ -505,6 +526,10 @@ def main(argv: list[str] | None = None) -> None:
         result = check(args.db, scheduler=args.scheduler)
         print(json.dumps(result))
         sys.exit(0 if result["ok"] else 1)
+    if args.command == "hash-password":
+        # Never touches the database (on a fresh server it must not create an empty one).
+        cmd_hash_password(None, args)
+        return
 
     tmp = None
     if args.dry_run and args.command not in READ_ONLY:

@@ -28,6 +28,10 @@ const label = id => ({ claude: "Claude", gpt: "GPT" }[id] || id);
 
 async function get(path) {
   const r = await fetch(API + path);
+  if (r.status === 401) {               // session expired: back to the login page
+    location.href = "/login?next=" + encodeURIComponent(location.pathname + location.search);
+    throw new Error("Not signed in");
+  }
   if (!r.ok) {
     let msg = r.statusText;
     try { msg = (await r.json()).detail || msg; } catch (_) { /* not JSON */ }

@@ -3,9 +3,12 @@
 #   docker compose ps                status + health
 #   docker compose logs -f engine    follow the scheduler
 #
+# caddy   = HTTPS for your domain; the ONLY service reachable from outside
+# api     = dashboard + API, behind the login; internal network only
 # engine  = the scheduler: decide / execute / daily / backups / alerts
-# api     = dashboard + API
-# Both share the arena-data volume (the database). The CLI logins live in
+# setup   = the setup page, on the server's own 127.0.0.1:8000 only
+#           (open it through an SSH tunnel, see DEPLOY.md)
+# All share the arena-data volume (the database). The CLI logins live in
 # their own volumes so a rebuild never signs the agents out.
 
 x-common: &common
@@ -19,10 +22,48 @@ x-common: &common
     driver: json-file
     options: {max-size: "10m", max-file: "5"}    # don't fill the disk with logs
 
+x-server-env: &server-env
+  ARENA_SERVER: "1"                    # login + ADMIN_TOKEN required, see arena/api/auth.py
+
 services:
+  caddy:
+    image: caddy:2.10.2
+    env_file: .env                     # for DOMAIN
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data               # certificates
+      - caddy-config:/config
+    depends_on: [api]
+    restart: unless-stopped
+    networks: [web]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
+
+  api:
+    <<: *common
+    command: ["python", "-m", "arena.main", "serve", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      <<: *server-env
+      ARENA_DISABLE_CONTROL: "1"       # no setup page on the public side
+    volumes:
+      - arena-data:/app/data
+    # No `ports:`: only Caddy (same "web" network) can reach it. "default"
+    # gives it internet access for live prices.
+    networks: [web, default]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=10)"]
+      interval: 30s
+      timeout: 15s
+      start_period: 30s
+      retries: 3
+
   engine:
     <<: *common
     command: ["python", "-m", "arena.main", "scheduler"]
+    environment:
+      <<: *server-env
     volumes:
       - arena-data:/app/data
       - claude-home:/home/arena/.claude
@@ -37,23 +78,34 @@ services:
       start_period: 60s
       retries: 3
 
-  api:
+  setup:
     <<: *common
-    command: ["python", "-m", "arena.main", "serve", "--host", "0.0.0.0", "--port", "8000"]
+    # The server's own network, listening on 127.0.0.1 only: unreachable
+    # from the internet even without a firewall. The setup page checks that
+    # requests come from 127.0.0.1, which only an SSH tunnel can provide.
+    network_mode: host
+    command: ["python", "-m", "arena.main", "serve", "--host", "127.0.0.1", "--port", "8000"]
     environment:
-      ARENA_DISABLE_CONTROL: "1"         # the setup page only exists in the local app
+      <<: *server-env
+      AUTOSTART_SCHEDULER: "0"         # the engine service runs the scheduler
     volumes:
       - arena-data:/app/data
-    ports:
-      - "127.0.0.1:8000:8000"            # this computer only (SSH tunnel); Caddy comes in front later
+      - claude-home:/home/arena/.claude
+      - codex-home:/home/arena/.codex
+      - ./.env:/app/.env               # so the setup page can save settings (then: docker compose up -d)
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=10)"]
-      interval: 30s
+      interval: 60s
       timeout: 15s
       start_period: 30s
       retries: 3
+
+networks:
+  web:
 
 volumes:
   arena-data:
   claude-home:
   codex-home:
+  caddy-data:
+  caddy-config:

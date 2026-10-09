@@ -1,0 +1,33 @@
+# Caddy: the only thing reachable from the internet (ports 80 and 443).
+# It gets and renews a Let's Encrypt certificate for DOMAIN automatically,
+# redirects http -> https, and passes requests to the app on the internal
+# Docker network. DOMAIN comes from .env.
+{$DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		X-Robots-Tag "noindex, nofollow"
+		-Server
+	}
+
+	# Search engines: stay out (the app also sends noindex on every page).
+	respond /robots.txt <<TXT
+		User-agent: *
+		Disallow: /
+		TXT 200
+
+	# Overwrite whatever X-Forwarded-For a visitor sends, so the login rate
+	# limit sees the real address.
+	reverse_proxy api:8000 {
+		header_up X-Forwarded-For {remote_host}
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}
