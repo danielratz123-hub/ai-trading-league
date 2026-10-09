@@ -17,7 +17,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .. import league, ledger
+from .. import health, league, ledger
 from ..config import SETTINGS
 from ..db import connect
 from . import control, live, queries
@@ -82,6 +82,19 @@ def create_app() -> FastAPI:
         resp = await call_next(request)
         resp.headers["X-Robots-Tag"] = "noindex, nofollow"
         return resp
+
+    @app.get("/healthz")
+    def healthz():
+        """For Docker's healthcheck and uptime monitors. No login needed, so
+        it says only ok / not ok; details are in /api/health."""
+        result = health.check(db_path())
+        if not result["ok"]:
+            raise HTTPException(503, "unhealthy")
+        return {"ok": True}
+
+    @app.get("/api/health")
+    def health_details():
+        return health.check(db_path(), scheduler=True)
 
     @app.get("/api/status")
     def status(conn=Depends(read_conn)):

@@ -1,44 +1,59 @@
-# docker compose up -d --build        engine (scheduler) + API on 127.0.0.1:8000
-# docker compose --profile https up -d   ...plus Caddy for HTTPS on your domain
+# AI Trading League on a VPS. See DEPLOY.md.
+#   docker compose up -d --build     start everything
+#   docker compose ps                status + health
+#   docker compose logs -f engine    follow the scheduler
+#
+# engine  = the scheduler: decide / execute / daily / backups / alerts
+# api     = dashboard + API
+# Both share the arena-data volume (the database). The CLI logins live in
+# their own volumes so a rebuild never signs the agents out.
+
+x-common: &common
+  build: .
+  image: ai-trading-league:latest
+  env_file: .env
+  restart: unless-stopped
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+  logging:
+    driver: json-file
+    options: {max-size: "10m", max-file: "5"}    # don't fill the disk with logs
+
 services:
   engine:
-    build: .
+    <<: *common
     command: ["python", "-m", "arena.main", "scheduler"]
-    env_file: .env
     volumes:
       - arena-data:/app/data
-      - claude-home:/home/arena/.claude    # Claude Code settings (login via CLAUDE_CODE_OAUTH_TOKEN)
-      - codex-home:/home/arena/.codex      # Codex login (codex login --device-auth)
-    restart: unless-stopped
-    security_opt: ["no-new-privileges:true"]
-    cap_drop: [ALL]
+      - claude-home:/home/arena/.claude
+      - codex-home:/home/arena/.codex
+    # docker stop sends SIGTERM; the scheduler finishes its current job
+    # first. Agent turns can take long; they re-run safely after a kill.
+    stop_grace_period: 2m
+    healthcheck:
+      test: ["CMD", "python", "-m", "arena.main", "health", "--scheduler"]
+      interval: 60s
+      timeout: 20s
+      start_period: 60s
+      retries: 3
 
   api:
-    build: .
+    <<: *common
     command: ["python", "-m", "arena.main", "serve", "--host", "0.0.0.0", "--port", "8000"]
-    env_file: .env
     environment:
-      ARENA_DB: /app/data/arena.db
-      ARENA_DISABLE_CONTROL: "1"         # the setup page is for running on your own PC only
+      ARENA_DISABLE_CONTROL: "1"         # the setup page only exists in the local app
     volumes:
-      - arena-data:/app/data             # read-only access in code; pause/resume writes one flag
+      - arena-data:/app/data
     ports:
-      - "127.0.0.1:8000:8000"            # only reachable through Caddy / an SSH tunnel
-    restart: unless-stopped
-    security_opt: ["no-new-privileges:true"]
-    cap_drop: [ALL]
-
-  caddy:
-    image: caddy:2
-    profiles: [https]
-    command: ["caddy", "reverse-proxy", "--from", "${DOMAIN:?set DOMAIN in .env}", "--to", "api:8000"]
-    ports: ["80:80", "443:443"]
-    volumes:
-      - caddy-data:/data
-    restart: unless-stopped
+      - "127.0.0.1:8000:8000"            # this computer only (SSH tunnel); Caddy comes in front later
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=10)"]
+      interval: 30s
+      timeout: 15s
+      start_period: 30s
+      retries: 3
 
 volumes:
   arena-data:
   claude-home:
   codex-home:
-  caddy-data:

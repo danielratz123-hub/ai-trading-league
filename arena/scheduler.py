@@ -252,6 +252,8 @@ def run_forever(db_path: str | Path = SETTINGS.db_path, tick_seconds: int = 30) 
     import signal
     signal.signal(signal.SIGTERM, _request_stop)
     _die_with_parent()
+    from .health import start_heartbeat
+    start_heartbeat(db_path, _STOP)        # Docker's healthcheck watches this file
     conn = connect(db_path)
     log_dir = Path(db_path).resolve().parent / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)

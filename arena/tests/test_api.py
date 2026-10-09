@@ -132,3 +132,31 @@ def test_dashboard_page_is_served(client):
     r = c.get("/")
     assert r.status_code == 200 and "AI Trading League" in r.text
     assert c.get("/app.js").status_code == 200
+
+
+def test_healthz_and_health_command(client, tmp_path):
+    import subprocess
+    import sys
+    import time
+
+    from arena import health
+    c, path, _ = client
+    assert c.get("/healthz").json() == {"ok": True}
+    details = c.get("/api/health").json()
+    assert details["db"] is True and "disk_free_gb" in details
+    # The command Docker runs: healthy without --scheduler, unhealthy with a
+    # missing heartbeat, healthy again once the heartbeat is fresh.
+    cmd = [sys.executable, "-m", "arena.main", "health", "--db", str(path)]
+    assert subprocess.run(cmd, capture_output=True).returncode == 0
+    hb = health.heartbeat_path(path)
+    hb.unlink(missing_ok=True)
+    assert subprocess.run(cmd + ["--scheduler"], capture_output=True).returncode == 1
+    hb.write_text(str(time.time()), encoding="utf-8")
+    assert subprocess.run(cmd + ["--scheduler"], capture_output=True).returncode == 0
+    hb.write_text(str(time.time() - 600), encoding="utf-8")
+    r = subprocess.run(cmd + ["--scheduler"], capture_output=True, text=True)
+    assert r.returncode == 1 and "heartbeat" in r.stdout
+    # A missing database is unhealthy.
+    missing = tmp_path / "nope" / "arena.db"
+    assert subprocess.run([sys.executable, "-m", "arena.main", "health", "--db", str(missing)],
+                          capture_output=True).returncode == 1

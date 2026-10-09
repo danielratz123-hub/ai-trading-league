@@ -26,6 +26,7 @@ League (times are US Eastern)
     app              the easy way: dashboard + setup page, opens your browser (start.cmd runs this)
     serve            run the dashboard + read-only API on http://127.0.0.1:8000
     scheduler        run decide / execute / daily automatically on US market time
+    health           quick check (database, disk; --scheduler: heartbeat too); exit 1 if unhealthy
     mirror           show (or with --apply, place) the paper-account orders that copy the leader
 Tools
     tool             try a research tool by hand, e.g.
@@ -416,6 +417,7 @@ COMMANDS = {
     "scheduler": cmd_scheduler,
     "mirror": cmd_mirror,
     "tool": cmd_tool,
+    "health": None,          # handled in main() before the database is opened
 }
 READ_ONLY = {"status", "tool", "check-agents", "init-db", "serve", "scheduler", "app"}
 
@@ -453,9 +455,17 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--no-browser", action="store_true", help="app: don't open the browser")
     parser.add_argument("--host", default="127.0.0.1", help="serve: address to listen on")
     parser.add_argument("--port", type=int, default=8000, help="serve: port")
+    parser.add_argument("--scheduler", action="store_true", help="health: also check the scheduler heartbeat")
     parser.add_argument("--db", default=str(SETTINGS.db_path), help="database path")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
+
+    if args.command == "health":
+        # Runs every 30 s from Docker: no database connection/migration, no network.
+        from .health import check
+        result = check(args.db, scheduler=args.scheduler)
+        print(json.dumps(result))
+        sys.exit(0 if result["ok"] else 1)
 
     tmp = None
     if args.dry_run and args.command not in READ_ONLY:
