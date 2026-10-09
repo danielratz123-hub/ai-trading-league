@@ -413,13 +413,24 @@ RTM_NEWADDR"), with or without extra capabilities. Only `--privileged` would
 work, and that would remove the container's own protection for everything
 in it, so it's not used.
 
-Instead, the Compose file sets `CODEX_SANDBOX=danger-full-access` for the
-server services. This is safe here because Codex's shell, command runner,
-patch tool, connectors, sub-agents, browser and plugins are all switched off
-by `arena/agents/cli.py` (so the model can't run commands or edit files),
-and the probe turn checks that no shell command was run. The boundary is the
-container: non-root, all capabilities dropped, `no-new-privileges`, no
-secrets in Codex's environment.
+Instead, the Compose file sets `CODEX_SANDBOX=danger-full-access`, and the
+league puts Codex in its own **Landlock jail** (`arena/agents/jail.py`).
+Without a sandbox, Codex's `apply_patch` tool can write files: on the VPS
+it wrote next to the database in a test. The jail is a Linux kernel
+feature that works in a default container without extra permissions.
+Inside it, Codex and everything it starts can read, but can write only to
+the turn's scratch folder, its login folder (`~/.codex`) and `/dev`. The
+league's tool server is not inside the jail: for Codex it runs over
+`127.0.0.1` with a random token per turn (`mcp_server.py --http`), so the
+database and the turn's result file are out of Codex's reach. If Landlock
+is missing, Codex is not started at all.
+
+Verified on the VPS (Ubuntu 24.04, kernel 6.8, Landlock ABI 4): asked to
+write to the database folder, `/tmp`, its home folder, the result file and
+its scratch folder, Codex succeeded only in the scratch folder. Any file
+change also counts as a security event: an alert, and the probe fails. Its
+shell and command runner stay switched off; the container stays non-root,
+with all capabilities dropped and `no-new-privileges`.
 
 ## Security
 
