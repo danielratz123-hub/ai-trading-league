@@ -5,6 +5,7 @@
     decide    the morning after the week's last trading day (normally Saturday 10:00)
     calendar  Sundays at noon (refreshes holidays)
     check-logins  every day at 07:00, and 2 hours before every decide (08:00)
+    backup    every day at 17:30 (after daily)
 
     python -m arena.main scheduler
 
@@ -40,12 +41,15 @@ DAILY_AFTER_CLOSE = timedelta(minutes=45)
 DECIDE_AT = (10, 0)                  # the morning after the week's last close
 CALENDAR_AT = (12, 0)                # Sundays
 LOGIN_CHECK_AT = (7, 0)              # daily
+BACKUP_AT = (17, 30)                 # daily, after the daily job (16:45)
+DISK_CHECK_EVERY = timedelta(hours=1)
 PRE_DECIDE_CHECK = timedelta(hours=2)
 TEMPFAIL = 75                        # "retry until fixed" (a login problem at decide)
 CATCH_UP_DAYS = 4                    # don't replay days older than this after downtime
 MAX_ATTEMPTS = 3
 RETRY_AFTER = timedelta(minutes=30)
-TIMEOUTS = {"decide": 3 * 3600, "execute": 1800, "daily": 3600, "update-calendar": 600}
+TIMEOUTS = {"decide": 3 * 3600, "execute": 1800, "daily": 3600, "update-calendar": 600,
+            "backup": 1800, "check-logins": 1200}
 
 
 
@@ -137,6 +141,9 @@ def due_jobs(now: datetime, calendar: dict[str, str], history: dict[tuple[str, s
         if start <= now < end:
             add("decide", week_end)
 
+    if now >= _at(today, BACKUP_AT):
+        add("backup", None, f"backup-{today}")
+
     # Login health check, daily. Last in the list so it never delays
     # execute or daily (a probe turn can take a few minutes).
     if now >= _at(today, LOGIN_CHECK_AT):
@@ -192,7 +199,44 @@ def run_job(conn: sqlite3.Connection, job: Job, log_dir: Path, db_path: str | Pa
         conn.execute("UPDATE job_runs SET finished_at=?, exit_code=?, output_tail=? WHERE id=?",
                      (datetime.now(ET).isoformat(), code, output[-4000:], run_id))
     (log.info if code == 0 else log.error)("%s %s finished with exit code %s", job.name, job.key, code)
+    _alert_job(conn, job, code, output)
     return code
+
+
+def _alert_job(conn, job: Job, code: int, output: str) -> None:
+    """Telegram: every failed run, and a note when a retry succeeds."""
+    from . import alerts
+    try:
+        runs = conn.execute("SELECT exit_code FROM job_runs WHERE job=? AND key=? ORDER BY id",
+                            (job.name, job.key)).fetchall()
+        earlier = [r[0] for r in runs[:-1]]
+        if code == 0:
+            if earlier:
+                alerts.send(f"Job {job.name} ({job.key}) succeeded on retry {len(earlier)}.", level="good")
+            return
+        if code == TEMPFAIL:
+            return       # login problem: league.decide already alerted (throttled)
+        hard = sum(1 for c in earlier + [code] if c != TEMPFAIL)
+        tail = "\n".join(output.strip().splitlines()[-6:])[-800:]
+        nxt = (f"Will retry in {int(RETRY_AFTER.total_seconds() // 60)} minutes (attempt {hard}/{MAX_ATTEMPTS})."
+               if hard < MAX_ATTEMPTS else
+               f"Gave up after {MAX_ATTEMPTS} attempts: please look at it (data/logs, docker compose logs engine).")
+        alerts.send(f"Job {job.name} ({job.key}) FAILED with exit code {code}. {nxt}\n{tail}", level="error")
+    except Exception:  # noqa: BLE001 - alerts must never break the scheduler
+        log.exception("could not send the job alert")
+
+
+def _check_disk(db_path) -> None:
+    from . import alerts
+    from .health import LOW_DISK_GB, disk_free_gb
+    try:
+        free = disk_free_gb(db_path)
+        if free < LOW_DISK_GB:
+            alerts.send(f"Low disk space on the server: {free:.1f} GB free. Backups and the database "
+                        f"need room; clean up with `docker system prune` or grow the disk.",
+                        level="error", key="low-disk", every=timedelta(hours=6))
+    except Exception:  # noqa: BLE001
+        log.exception("disk check failed")
 
 
 class AlreadyRunning(RuntimeError):
@@ -273,7 +317,15 @@ def run_forever(db_path: str | Path = SETTINGS.db_path, tick_seconds: int = 30) 
     log_dir = Path(db_path).resolve().parent / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log.info("scheduler started (US/Eastern now %s); logs in %s", datetime.now(ET).strftime("%Y-%m-%d %H:%M"), log_dir)
+    from . import alerts
+    alerts.send(f"Scheduler started ({datetime.now(ET):%a %Y-%m-%d %H:%M} ET). If you didn't restart it, "
+                f"the server or container restarted; missed jobs are caught up automatically.",
+                level="info", key="scheduler-start", every=timedelta(minutes=10))
+    last_disk_check = datetime.min.replace(tzinfo=ET)
     while not _STOP.is_set() and not _parent_gone():
+        if datetime.now(ET) - last_disk_check >= DISK_CHECK_EVERY:
+            _check_disk(db_path)
+            last_disk_check = datetime.now(ET)
         started = conn.execute("SELECT 1 FROM agents LIMIT 1").fetchone() is not None
         for job in due_jobs(datetime.now(ET), _calendar(conn), _history(conn), started):
             if _STOP.is_set():

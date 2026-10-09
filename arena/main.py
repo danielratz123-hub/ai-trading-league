@@ -30,6 +30,10 @@ League (times are US Eastern)
     hash-password    make DASHBOARD_PASSWORD_HASH for the dashboard login (asks for the password)
     scheduler        run decide / execute / daily automatically on US market time
     health           quick check (database, disk; --scheduler: heartbeat too); exit 1 if unhealthy
+    backup           back up the database now (online backup API, compressed, uploaded if configured)
+    backups          list the backups (local and remote)
+    restore-backup   NAME|latest --to PATH: download, check and unpack a backup (used by scripts/restore.sh)
+    test-alert       send a test Telegram alert
     mirror           show (or with --apply, place) the paper-account orders that copy the leader
 Tools
     tool             try a research tool by hand, e.g.
@@ -154,8 +158,10 @@ def cmd_execute(conn, args) -> None:
     if w is None:
         print("No weekly orders due today.")
         _maybe_mirror(conn, d, args)
+        _execute_summary(conn, d, rep, args)
         return
     _maybe_mirror(conn, d, args)
+    _execute_summary(conn, d, rep, args)
     print(f"Executed week {w.week_no} at the {w.exec_date} open. Trades: {w.trades}")
     if w.scored_week:
         print(f"Scored week {w.scored_week}: " + ", ".join(f"{a} {r:+.2%}" for a, r in w.weekly_returns.items()))
@@ -333,19 +339,53 @@ def cmd_resume(conn, args) -> None:
 
 
 def _maybe_mirror(conn, d, args) -> None:
-    from . import mirror
+    from . import alerts, mirror
     if mirror.mode() == "off":
         return
     if args.dry_run:
         print("Paper mirror skipped in --dry-run (it would place real paper orders).")
         return
+    problems = []
     try:
         for agent, lines in mirror.sync_all(conn, d).items():
             n = sum(len(l.orders) for l in lines)
             notes = "; ".join(f"{l.ticker}: {l.note}" for l in lines if l.note)
             print(f"Paper mirror ({agent}): {n} order(s) sent" + (f"; notes: {notes}" if notes else ""))
+            problems += [f"{agent} {l.ticker}: {l.note}" for l in lines if "rejected" in (l.note or "")]
     except Exception as e:  # noqa: BLE001 - the league itself already executed fine
         print(f"Paper mirror failed (league unaffected): {e}")
+        problems.append(f"sync failed: {type(e).__name__}: {str(e)[:300]}")
+    if problems:
+        alerts.send("Alpaca paper mirror problem (the league itself is fine):\n"
+                    + "\n".join(problems[:10])[:1500], level="warning")
+
+
+def _execute_summary(conn, d, rep, args) -> None:
+    """Telegram after every execute: trades, equity per agent, weekly winner."""
+    if args.dry_run:
+        return
+    from . import alerts
+    try:
+        lines = [f"Execute {d} done."]
+        w = rep.weekly
+        if w is not None:
+            lines.append(f"Week {w.week_no} rebalanced at the open.")
+        for a in ledger.agent_ids(conn):
+            t = conn.execute("SELECT COUNT(*), COALESCE(SUM(value), 0) FROM trades WHERE agent_id=? AND date=?",
+                             (a, d)).fetchone()
+            v = ledger.value_agent(conn, a, d, "open")
+            lines.append(f"{a}: {t[0]} trade(s) (${t[1]:,.0f}); equity ${v.equity:,.2f}")
+        if w is not None and w.scored_week and w.weekly_returns:
+            best = max(w.weekly_returns.values())
+            winners = [a for a, r in w.weekly_returns.items() if r == best]
+            returns = ", ".join(f"{a} {r:+.2%}" for a, r in w.weekly_returns.items())
+            lines.append(f"Week {w.scored_week} scored: {returns}. "
+                         + (f"Winner: {winners[0]}." if len(winners) == 1 else "A tie."))
+        if w is not None and w.bonus_winner:
+            lines.append(f"Bonus ${SETTINGS.bonus_amount:,.0f} deposited to {w.bonus_winner}.")
+        alerts.send("\n".join(lines), level="info")
+    except Exception as e:  # noqa: BLE001 - a summary must never fail the execute job
+        print(f"(could not send the execute summary: {type(e).__name__})")
 
 
 def _mirror_date(conn) -> str:
@@ -434,6 +474,51 @@ def cmd_hash_password(conn, args) -> None:
     print("DASHBOARD_PASSWORD_HASH=" + h.replace("$", "$$"))
 
 
+def _storage():
+    from .backup import remote_storage
+    return remote_storage()
+
+
+def cmd_backup(conn, args) -> None:
+    from . import alerts
+    from .backup import run_backup
+    try:
+        res = run_backup(args.db, _storage())
+    except Exception as e:  # noqa: BLE001 - report clearly; the scheduler retries
+        alerts.send(f"Backup FAILED: {type(e).__name__}: {str(e)[:300]}", level="error")
+        sys.exit(f"Backup failed: {type(e).__name__}: {e}")
+    print(f"Backup {res.local.name}: {res.size / 1e6:.2f} MB")
+    print("Uploaded: " + (", ".join(res.uploaded) if res.uploaded else "nothing (BACKUP_S3_BUCKET not set; local copy only)"))
+    if res.deleted:
+        print("Removed old copies: " + ", ".join(res.deleted))
+
+
+def cmd_backups(conn, args) -> None:
+    from .backup import list_backups
+    for name in list_backups(args.db, _storage()):
+        print(name)
+
+
+def cmd_restore_backup(conn, args) -> None:
+    from .backup import fetch_backup
+    if not args.to:
+        sys.exit("Usage: restore-backup NAME|latest --to PATH   (scripts/restore.sh does the rest)")
+    if Path(args.to).resolve() == Path(args.db).resolve():
+        sys.exit("--to must not be the live database; scripts/restore.sh swaps the files safely.")
+    name = fetch_backup(args.name or "latest", args.to, args.db, _storage())
+    print(f"Restored {name} to {args.to} (integrity check passed)")
+
+
+def cmd_test_alert(conn, args) -> None:
+    from . import alerts
+    if not alerts.configured():
+        sys.exit("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are not set in .env.")
+    ok = alerts.send("Test alert: if you can read this, alerts work.", level="good")
+    print("Sent." if ok else "Telegram did not accept the message (check the token and chat id; see the log).")
+    if not ok:
+        sys.exit(1)
+
+
 def cmd_tool(conn, args) -> None:
     from .tools.context import ResearchContext
     from .tools.registry import ToolBox
@@ -474,9 +559,14 @@ COMMANDS = {
     "mirror": cmd_mirror,
     "tool": cmd_tool,
     "health": None,
-    "hash-password": cmd_hash_password,          # handled in main() before the database is opened
+    "hash-password": cmd_hash_password,
+    "backup": cmd_backup,
+    "backups": cmd_backups,
+    "restore-backup": None,  # handled in main() before the database is opened
+    "test-alert": cmd_test_alert,          # handled in main() before the database is opened
 }
-READ_ONLY = {"status", "tool", "check-agents", "init-db", "serve", "scheduler", "app", "hash-password"}
+READ_ONLY = {"status", "tool", "check-agents", "init-db", "serve", "scheduler", "app", "hash-password",
+             "backup", "backups", "restore-backup", "test-alert", "check-logins", "health"}
 
 
 def _throwaway_copy(db: str, workdir: str) -> str:
@@ -512,6 +602,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--no-browser", action="store_true", help="app: don't open the browser")
     parser.add_argument("--host", default="127.0.0.1", help="serve: address to listen on")
     parser.add_argument("--port", type=int, default=8000, help="serve: port")
+    parser.add_argument("--to", help="restore-backup: where to write the restored database")
     parser.add_argument("--reason", help="check-logins: shown in the alert (e.g. 'before decide')")
     parser.add_argument("--scheduler", action="store_true", help="health: also check the scheduler heartbeat")
     parser.add_argument("--db", default=str(SETTINGS.db_path), help="database path")
@@ -526,6 +617,13 @@ def main(argv: list[str] | None = None) -> None:
         result = check(args.db, scheduler=args.scheduler)
         print(json.dumps(result))
         sys.exit(0 if result["ok"] else 1)
+    if args.command == "restore-backup":
+        # Must not open (and so create or migrate) the database it may replace.
+        try:
+            cmd_restore_backup(None, args)
+        except Exception as e:  # noqa: BLE001
+            sys.exit(f"Restore failed: {type(e).__name__}: {e}")
+        return
     if args.command == "hash-password":
         # Never touches the database (on a fresh server it must not create an empty one).
         cmd_hash_password(None, args)

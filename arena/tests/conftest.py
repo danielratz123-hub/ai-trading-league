@@ -50,3 +50,15 @@ def agent(conn):
     """One agent with $1,000, created on the first trading day."""
     ledger.create_agent(conn, "claude", 1000.0, DAYS[0])
     return "claude"
+
+
+@pytest.fixture(autouse=True)
+def _no_real_alerts(monkeypatch, tmp_path_factory):
+    """Tests never send real Telegram messages (even if .env has a bot token)
+    or touch the real alerts-state file; subprocesses get no token either."""
+    from arena import alerts
+    monkeypatch.setattr(alerts, "_sender", lambda msg: True)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    state = tmp_path_factory.mktemp("alerts") / "alerts-state.json"
+    monkeypatch.setattr(alerts, "_state_file", lambda: state)

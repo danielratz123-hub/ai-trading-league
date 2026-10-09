@@ -202,6 +202,27 @@ def decide(conn: sqlite3.Connection, decision_date: str | None = None, simulate:
     return reports
 
 
+def _alert_turn(agent_id: str, week_no: int, accepted: bool, error: str | None, nudged: bool,
+                rejected: int, last_errors: list[str], shell: int = 0, simulate: bool = False) -> None:
+    """Telegram: failed turn, nudged turn, rejected submissions, shell use."""
+    if simulate:
+        return           # practice runs don't page you
+    where = f"{agent_id}, week {week_no}"
+    errs = "; ".join(e.splitlines()[0] for e in last_errors if e)[:500]
+    if shell:
+        alerts.send(f"SECURITY: {where}: the CLI ran {shell} shell command(s) despite the lockdown.", level="error")
+    if not accepted:
+        alerts.send(f"Agent turn FAILED ({where}): {(error or '')[:500]}\nIts portfolio stays as it is this week.",
+                    level="error")
+        return
+    if rejected:
+        alerts.send(f"Decision rejected {rejected} time(s) before being accepted ({where}). "
+                    f"Last reasons: {errs or 'n/a'}", level="warning")
+    if nudged:
+        alerts.send(f"Agent turn needed a nudge ({where}): it stopped without submitting and was "
+                    f"resumed once. Accepted in the end.", level="warning")
+
+
 def _login_problem(conn, problems: dict[str, str], agent_id: str, week_no: int, msg: str) -> None:
     problems[agent_id] = msg[:300]
     with transaction(conn):
@@ -285,6 +306,9 @@ def _run_agent_turn(conn, adapter: AgentAdapter, week_no: int, decision_date: st
                       f"week {week_no}: {status} (${out.cost_usd:.3f}){' - ' + out.error if out.error else ''}")
     finally:
         ctx.close_session()
+    ok = out.accepted is not None
+    _alert_turn(agent_id, week_no, ok, out.error, nudged=False,
+                rejected=max(0, out.attempts - (1 if ok else 0)), last_errors=[], simulate=simulate)
     return TurnReport(agent_id, status, out.cost_usd, out.tool_calls, out.web_searches, out.attempts,
                       out.error, out.accepted.message if out.accepted else "")
 
@@ -389,6 +413,11 @@ def _run_cli_turn(conn, agent: CliAgent, week_no: int, decision_date: str, exec_
         log_event(conn, "info" if accepted else "error", f"decide:{agent_id}",
                   f"week {week_no}: {'accepted' if accepted else 'failed'} via CLI"
                   f"{' - ' + error if error else ''}")
+    if not (not accepted and state.get("attempts", 0) == 0 and looks_like_login_error(error)):
+        # (A login failure is reported by decide itself, as a login problem.)
+        _alert_turn(agent_id, week_no, accepted, error, nudged=len(runs) > 1,
+                    rejected=max(0, state.get("attempts", 0) - (1 if accepted else 0)),
+                    last_errors=state.get("last_errors", []), shell=shell, simulate=simulate)
     return TurnReport(agent_id, "accepted" if accepted else "failed", 0.0, state.get("tool_calls", 0),
                       searches, state.get("attempts", 0), error)
 

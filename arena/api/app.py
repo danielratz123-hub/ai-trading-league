@@ -63,6 +63,12 @@ def _agent(conn, agent_id: str) -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     auth.check_config()            # on the server: refuse to start without a password / admin token
+    if auth.server_mode() and os.getenv("ARENA_DISABLE_CONTROL") == "1":
+        from datetime import timedelta
+
+        from .. import alerts
+        alerts.send("Dashboard (api) started. If you didn't restart it, the server or container restarted.",
+                    level="info", key="api-start", every=timedelta(minutes=10))
     control.autostart_scheduler()
     live.LIVE = live.LivePrices(db_path)
     live.LIVE.start()              # live prices for the dashboard, market hours only
