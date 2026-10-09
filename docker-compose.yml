@@ -1,0 +1,44 @@
+# docker compose up -d --build        engine (scheduler) + API on 127.0.0.1:8000
+# docker compose --profile https up -d   ...plus Caddy for HTTPS on your domain
+services:
+  engine:
+    build: .
+    command: ["python", "-m", "arena.main", "scheduler"]
+    env_file: .env
+    volumes:
+      - arena-data:/app/data
+      - claude-home:/home/arena/.claude    # Claude Code settings (login via CLAUDE_CODE_OAUTH_TOKEN)
+      - codex-home:/home/arena/.codex      # Codex login (codex login --device-auth)
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+  api:
+    build: .
+    command: ["python", "-m", "arena.main", "serve", "--host", "0.0.0.0", "--port", "8000"]
+    env_file: .env
+    environment:
+      ARENA_DB: /app/data/arena.db
+      ARENA_DISABLE_CONTROL: "1"         # the setup page is for running on your own PC only
+    volumes:
+      - arena-data:/app/data             # read-only access in code; pause/resume writes one flag
+    ports:
+      - "127.0.0.1:8000:8000"            # only reachable through Caddy / an SSH tunnel
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+  caddy:
+    image: caddy:2
+    profiles: [https]
+    command: ["caddy", "reverse-proxy", "--from", "${DOMAIN:?set DOMAIN in .env}", "--to", "api:8000"]
+    ports: ["80:80", "443:443"]
+    volumes:
+      - caddy-data:/data
+    restart: unless-stopped
+
+volumes:
+  arena-data:
+  claude-home:
+  codex-home:
+  caddy-data:

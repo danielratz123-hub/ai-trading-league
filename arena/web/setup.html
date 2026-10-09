@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>League Setup</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <h1>Setup</h1>
+      <p class="muted small" id="clock">Follow the steps from top to bottom.</p>
+    </div>
+    <div class="top-actions">
+      <a class="button-link" href="./">← Dashboard</a>
+    </div>
+  </header>
+
+  <main class="page setup">
+    <p id="error" class="error" role="alert" hidden></p>
+    <p id="locked" class="error" hidden>
+      The setup page only works on the computer that runs the league. Open it there
+      (double-click <code>start.cmd</code>) to change settings.
+    </p>
+
+    <!-- Step 1 -->
+    <section class="panel step" id="step-alpaca">
+      <div class="step-head"><span class="step-no">1</span><h2>Connect market data (Alpaca)</h2><span class="step-badge"></span></div>
+      <p class="muted">The league uses real US stock prices from <b>Alpaca</b>. It's free and uses no real money.</p>
+      <ol class="muted small howto">
+        <li>Create a free account at <a href="https://alpaca.markets" target="_blank" rel="noopener">alpaca.markets</a>.</li>
+        <li>Open the <b>Paper Trading</b> dashboard and press <b>API Keys → Generate New Keys</b>.</li>
+        <li>Paste both keys below and press <b>Save &amp; test</b>.</li>
+      </ol>
+      <div class="form-grid">
+        <label>API Key ID <input id="alpaca-key" type="password" autocomplete="off" spellcheck="false"></label>
+        <label>Secret Key <input id="alpaca-secret" type="password" autocomplete="off" spellcheck="false"></label>
+      </div>
+      <div class="row"><button id="save-alpaca" class="primary" type="button">Save &amp; test</button>
+        <span id="alpaca-msg" class="small"></span></div>
+    </section>
+
+    <!-- Step 2 -->
+    <section class="panel step" id="step-agents">
+      <div class="step-head"><span class="step-no">2</span><h2>Connect the two AIs</h2><span class="step-badge"></span></div>
+      <p class="muted">Both AIs play on <b>your own subscriptions</b> (Claude Pro/Max and ChatGPT Plus/Pro), so there
+        are no API bills. They run through the official apps <i>Claude Code</i> and <i>Codex</i>.</p>
+      <div class="row"><button id="check-agents" type="button">Check status</button>
+        <button id="install-agents" type="button">Install / update both apps</button>
+        <span class="muted small">Installing needs <a href="https://nodejs.org" target="_blank" rel="noopener">Node.js</a> (LTS).</span></div>
+      <div id="agent-cards" class="grid-2"></div>
+      <h3>Choose the models</h3>
+      <p class="muted small">For a fair match, pick models of a similar level:
+        <span id="pairs"></span></p>
+      <div class="form-grid">
+        <label>Claude model <select id="claude-model"></select><span id="claude-note" class="muted small"></span></label>
+        <label>ChatGPT model <select id="gpt-model"></select><span id="gpt-note" class="muted small"></span></label>
+        <label>Thinking effort (same for both)
+          <select id="effort"><option value="low">low (fast, uses least)</option><option value="medium">medium</option>
+            <option value="high">high (most thorough)</option></select></label>
+      </div>
+      <p class="muted small" id="gpt-source"></p>
+      <div class="row"><button id="save-models" type="button">Save models</button><span id="models-msg" class="small"></span></div>
+      <div class="row"><button id="test-agents" type="button">Run a test turn</button>
+        <span class="muted small">Both AIs answer one tiny question through the league's tools (uses a little of each plan).</span></div>
+    </section>
+
+    <!-- Step 3 -->
+    <section class="panel step" id="step-data">
+      <div class="step-head"><span class="step-no">3</span><h2>Download market data</h2><span class="step-badge"></span></div>
+      <p class="muted">Downloads daily prices for the S&amp;P 500 and major ETFs since 2015. The first time takes a few minutes.</p>
+      <p id="data-status" class="small"></p>
+      <div class="row"><button id="download-data" class="primary" type="button">Download data</button></div>
+    </section>
+
+    <!-- Step 4 -->
+    <section class="panel step" id="step-league">
+      <div class="step-head"><span class="step-no">4</span><h2>Start the league</h2><span class="step-badge"></span></div>
+      <p class="muted">Gives each AI $1,000 of virtual money and lets them make their first decisions. Each AI
+        researches for a few minutes, so this takes a while. Best on a weekend; mid-week it starts from last week's close.</p>
+      <p id="league-status" class="small"></p>
+      <div class="row"><button id="kickoff" class="primary" type="button">Start the league</button></div>
+      <details class="small">
+        <summary>Try a practice week first (optional)</summary>
+        <p class="muted">Replays past weeks with the real AIs in a separate practice database. Your real league isn't touched.
+          Web search is off, since the AIs could otherwise look up what happened next.</p>
+        <div class="form-grid">
+          <label>Start date <input id="practice-start" type="date" value="2025-06-02"></label>
+          <label>Weeks <select id="practice-weeks"><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
+        </div>
+        <div class="row"><button id="practice" type="button">Run practice</button></div>
+      </details>
+    </section>
+
+    <!-- Step 5 -->
+    <section class="panel step" id="step-scheduler">
+      <div class="step-head"><span class="step-no">5</span><h2>Keep it running</h2><span class="step-badge"></span></div>
+      <p class="muted">The scheduler runs the league automatically on US market time: trades at 9:50 each trading
+        morning, checks after each close, and the AIs decide every Saturday. It runs while this app is open, so keep
+        the black <code>start.cmd</code> window open and the computer awake (Settings → System → Power → sleep: Never).</p>
+      <p id="sched-status" class="small"></p>
+      <div class="row">
+        <button id="sched-start" class="primary" type="button">Start scheduler</button>
+        <button id="sched-stop" type="button">Stop</button>
+        <label class="check"><input id="autostart" type="checkbox"> Start it automatically when I open the app</label>
+      </div>
+      <div id="jobs" class="scroll"></div>
+    </section>
+
+    <!-- Step 6 -->
+    <section class="panel step" id="step-mirror">
+      <div class="step-head"><span class="step-no">6</span><h2>Show it in Alpaca (optional)</h2><span class="step-badge"></span></div>
+      <p class="muted">The league trades virtual $1,000 accounts inside this program. To also watch the AIs in Alpaca,
+        each AI's portfolio can be copied into a <b>paper</b> account (no real money) after every trading morning.
+        The copy holds the same percentages, scaled to the paper account's size. Shorts are rounded down to whole shares.</p>
+      <div class="form-grid">
+        <label>What to copy
+          <select id="mirror-mode">
+            <option value="off">Nothing (off)</option>
+            <option value="combined">Both AIs in one paper account (orders labeled)</option>
+            <option value="each">Each AI into its own paper account</option>
+            <option value="leader">Only the leading AI into my paper account</option>
+          </select></label>
+      </div>
+      <div id="mirror-each" class="small">
+        <ol class="muted howto">
+          <li>In Alpaca, open the account menu (top left) and choose <b>Open New Paper Account</b>.</li>
+          <li>Switch to that new paper account and press <b>API Keys, Generate New Keys</b>.</li>
+          <li>Paste them below for ChatGPT. Claude uses the keys from step 1, unless you fill its own below.</li>
+        </ol>
+        <div class="form-grid">
+          <label>ChatGPT paper account: Key ID <input id="mirror-gpt-key" type="password" autocomplete="off" spellcheck="false"></label>
+          <label>ChatGPT paper account: Secret <input id="mirror-gpt-secret" type="password" autocomplete="off" spellcheck="false"></label>
+          <label>Claude paper account: Key ID (optional) <input id="mirror-claude-key" type="password" autocomplete="off" spellcheck="false"></label>
+          <label>Claude paper account: Secret (optional) <input id="mirror-claude-secret" type="password" autocomplete="off" spellcheck="false"></label>
+        </div>
+      </div>
+      <div class="row">
+        <button id="save-mirror" class="primary" type="button">Save &amp; test</button>
+        <button id="mirror-now" type="button">Copy to Alpaca now</button>
+        <span id="mirror-msg" class="small"></span>
+      </div>
+    </section>
+
+    <!-- Running task -->
+    <section class="panel" id="task-panel" hidden>
+      <div class="panel-head"><h2 id="task-title">Running…</h2><span id="task-badge"></span></div>
+      <pre id="task-log" class="code log"></pre>
+    </section>
+  </main>
+
+  <script src="setup.js"></script>
+</body>
+</html>
