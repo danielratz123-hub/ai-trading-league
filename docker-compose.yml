@@ -12,7 +12,10 @@
 # their own volumes so a rebuild never signs the agents out.
 
 x-common: &common
-  build: .
+  build:
+    context: .
+    args:
+      APP_UID: ${APP_UID:-1000}        # your user id on the server (id -u); set in .env
   image: ai-trading-league:latest
   env_file: .env
   restart: unless-stopped

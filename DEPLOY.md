@@ -175,8 +175,10 @@ Every setting is explained in the file. On the server you need at least:
 Without `ADMIN_TOKEN` and `DASHBOARD_PASSWORD_HASH` the dashboard refuses to
 start on the server (on purpose: it must never run unprotected).
 
-The `setup` service edits `.env` from the setup page; it runs as uid 1000.
-If your server user isn't uid 1000 (`id -u`), run `sudo chown 1000 .env`.
+Set `APP_UID` in `.env` to your user id on the server (`id -u`). The
+containers run as that user, so the setup page can save settings into `.env`
+while the file stays readable only by you. (Some providers, like Contabo,
+create a default `ubuntu` user with id 1000; never give it your `.env`.)
 
 ## 6. DNS
 

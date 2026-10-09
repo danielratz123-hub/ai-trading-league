@@ -28,11 +28,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY arena ./arena
 COPY scripts ./scripts
 
-# Run as an unprivileged user (uid 1000). data/ and the CLIs' login folders
-# are named volumes, so they survive rebuilds. CLAUDE_CONFIG_DIR keeps ALL of
+# Run as an unprivileged user. APP_UID should be your own user id on the
+# server (`id -u`), so the setup page can edit the bind-mounted .env while it
+# stays private to you (chmod 600). data/ and the CLIs' login folders are
+# named volumes, so they survive rebuilds. CLAUDE_CONFIG_DIR keeps ALL of
 # Claude Code's files (including what it normally puts in ~/.claude.json)
 # inside the claude-home volume.
-RUN useradd --create-home --uid 1000 arena \
+ARG APP_UID=1000
+RUN useradd --create-home --uid ${APP_UID} arena \
  && mkdir -p /app/data /home/arena/.claude /home/arena/.codex \
  && chown -R arena:arena /app/data /home/arena
 USER arena
