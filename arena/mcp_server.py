@@ -12,6 +12,13 @@ The CLI starts this process itself (see agents/cli.py), one per turn:
 
 The league reads the outcome from the --result JSON file after the CLI exits.
 
+With --http it serves the same protocol as a "streamable HTTP" MCP server
+on 127.0.0.1 instead of stdio, and prints "PORT <n>" once it listens. The
+league uses this for an agent that runs inside the Landlock jail
+(agents/jail.py): this server then runs OUTSIDE the jail, so the agent's
+process can't write to the database or the result file, while the tools can.
+Every request must carry "Authorization: Bearer <ARENA_MCP_TOKEN>".
+
 With --report the server is a ReportServer instead: the weekly strategy
 report turn (arena/reports.py). It opens the database READ-ONLY and its
 tools only ever query the agent's own rows.
@@ -219,6 +226,62 @@ def handle(server: TurnServer, msg: dict) -> dict | None:
     return {"jsonrpc": "2.0", "id": msg_id, "result": result}
 
 
+def serve_http(server, token: str, out, host: str = "127.0.0.1") -> None:
+    """MCP over HTTP: POST /mcp with a JSON-RPC message (or a batch); JSON
+    reply, or 202 for notifications. No server-sent events are needed."""
+    import hmac
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    lock = threading.Lock()          # the tool state isn't thread-safe
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def _send(self, code: int, body: bytes = b"", ctype: str = "application/json") -> None:
+            self.send_response(code)
+            if body:
+                self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if body:
+                self.wfile.write(body)
+
+        def _authorized(self) -> bool:
+            got = self.headers.get("Authorization", "")
+            return hmac.compare_digest(got.encode(), f"Bearer {token}".encode())
+
+        def do_POST(self):
+            if self.path.split("?")[0].rstrip("/") != "/mcp":
+                return self._send(404)
+            if not self._authorized():
+                return self._send(401)
+            raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                return self._send(400, json.dumps({"jsonrpc": "2.0", "id": None,
+                                                   "error": {"code": -32700, "message": "Parse error"}}).encode())
+            batch = isinstance(msg, list)
+            with lock:
+                replies = [r for r in (handle(server, m) for m in (msg if batch else [msg])) if r is not None]
+            if not replies:
+                return self._send(202)
+            self._send(200, json.dumps(replies if batch else replies[0]).encode())
+
+        def do_GET(self):
+            self._send(405)          # no server-initiated messages
+
+        def do_DELETE(self):
+            self._send(200 if self._authorized() else 401)
+
+    httpd = HTTPServer((host, 0), Handler)
+    out.write(f"PORT {httpd.server_address[1]}\n")
+    out.flush()
+    httpd.serve_forever()
+
+
 def serve(server: TurnServer, stdin, stdout) -> None:
     for raw in stdin:
         line = raw.strip()
@@ -246,6 +309,7 @@ def main() -> None:
     p.add_argument("--simulate", action="store_true")
     p.add_argument("--probe", action="store_true", help="expose only a 'ping' tool (check-agents)")
     p.add_argument("--report", action="store_true", help="the weekly report turn (read-only tools)")
+    p.add_argument("--http", action="store_true", help="serve on 127.0.0.1 over HTTP (token in ARENA_MCP_TOKEN)")
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 
@@ -255,7 +319,18 @@ def main() -> None:
     sys.stdout = sys.stderr
     server = ReportServer(args) if args.report else TurnServer(args)
     try:
-        serve(server, sys.stdin, protocol_out)
+        if args.http:
+            import os
+            token = os.environ.get("ARENA_MCP_TOKEN", "")
+            if len(token) < 20:
+                sys.exit("--http needs ARENA_MCP_TOKEN (at least 20 characters)")
+            import signal
+            # The league stops us with SIGTERM: exit through `finally` so the
+            # sandbox's temporary price files are cleaned up.
+            signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+            serve_http(server, token, protocol_out)
+        else:
+            serve(server, sys.stdin, protocol_out)
     finally:
         server.close()
 

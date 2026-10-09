@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import shutil
 import signal
 import subprocess
@@ -38,10 +39,29 @@ _SECRET_NAME = re.compile(r"(KEY|SECRET|TOKEN|PASSWORD|PASSWD|HASH|CREDENTIAL)",
 
 @dataclass
 class McpLaunch:
-    """How the CLI should start our MCP server."""
+    """How the CLI should start our MCP server (or, with url, reach it)."""
     command: str
     args: list[str]
     env: dict[str, str]
+    url: str | None = None           # set when the league runs it over HTTP (jailed agents)
+
+
+def _start_http_mcp(mcp: McpLaunch, token: str, workdir: Path) -> tuple[subprocess.Popen, str]:
+    """Start the tool server over HTTP on 127.0.0.1; returns (process, url)."""
+    import threading
+    log = open(workdir / "mcp-server.log", "w", encoding="utf-8")
+    proc = subprocess.Popen([mcp.command, *mcp.args, "--http"], stdout=subprocess.PIPE, stderr=log,
+                            stdin=subprocess.DEVNULL, env={**os.environ, **mcp.env, "ARENA_MCP_TOKEN": token},
+                            text=True)
+    first: list[str] = []
+    t = threading.Thread(target=lambda: first.append(proc.stdout.readline()), daemon=True)
+    t.start()
+    t.join(60)
+    line = first[0].strip() if first else ""
+    if not line.startswith("PORT "):
+        proc.kill()
+        raise RuntimeError(f"The league's tool server didn't start over HTTP (got {line!r}; see mcp-server.log).")
+    return proc, f"http://127.0.0.1:{int(line.split()[1])}/mcp"
 
 
 @dataclass
@@ -51,6 +71,7 @@ class CliRun:
     usage: Usage = field(default_factory=Usage)
     web_searches: int = 0
     shell_commands: int = 0          # must stay 0; recorded as a security check
+    file_changes: int = 0            # must stay 0 too (Codex apply_patch); security check
     error: str | None = None
     api_equivalent_usd: float = 0.0  # what it would cost on the API (info only)
     final_text: str = ""
@@ -158,29 +179,63 @@ class CliAgent(ABC):
     def env(self) -> dict[str, str]:
         return _clean_env()
 
+    def jailed(self) -> bool:
+        """Run inside the Landlock jail (agents/jail.py), with the tool server
+        outside it over HTTP? Only for a CLI whose own sandbox is off."""
+        return False
+
+    def writable_dirs(self) -> list[str]:
+        """Inside the jail, besides the turn's scratch folder."""
+        return []
+
     def run(self, prompt: str, workdir: Path, mcp: McpLaunch, web_search: bool,
             resume_session: str | None = None, timeout: int | None = None) -> CliRun:
         run = CliRun()
         timeout = timeout or SETTINGS.cli_turn_timeout_sec
+        server = None
+        cwd, env = workdir, self.env()
         try:
-            argv = self.command(workdir, mcp, web_search, resume_session)
-        except FileNotFoundError as e:
+            if self.jailed():
+                # The tool server runs here, outside the jail; the agent gets
+                # only a scratch folder (the result file stays out of reach).
+                token = secrets.token_urlsafe(32)
+                server, url = _start_http_mcp(mcp, token, workdir)
+                mcp = McpLaunch(mcp.command, mcp.args, mcp.env, url=url)
+                cwd = workdir / "scratch"
+                cwd.mkdir(exist_ok=True)
+                env = {**env, "ARENA_MCP_TOKEN": token, "TMPDIR": str(cwd)}
+            try:
+                argv = self.command(cwd, mcp, web_search, resume_session)
+            except FileNotFoundError as e:
+                run.error = str(e)
+                return run
+            if self.jailed():
+                from .jail import prefix
+                argv = prefix([cwd, *self.writable_dirs(), "/dev"]) + argv
+            try:
+                proc = subprocess.Popen(
+                    argv, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE, start_new_session=(os.name != "nt"),
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+            except OSError as e:   # e.g. node missing or a broken install
+                run.error = f"Could not start {type(self).__name__}: {e}"
+                return run
+            try:
+                out, err = proc.communicate(prompt.encode("utf-8"), timeout=timeout)
+            except subprocess.TimeoutExpired:
+                _kill_tree(proc)
+                out, err = proc.communicate()
+                run.error = f"Turn timed out after {timeout}s."
+        except RuntimeError as e:      # the HTTP tool server didn't start
             run.error = str(e)
             return run
-        try:
-            proc = subprocess.Popen(
-                argv, cwd=workdir, env=self.env(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, start_new_session=(os.name != "nt"),
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
-        except OSError as e:   # e.g. node missing or a broken install
-            run.error = f"Could not start {type(self).__name__}: {e}"
-            return run
-        try:
-            out, err = proc.communicate(prompt.encode("utf-8"), timeout=timeout)
-        except subprocess.TimeoutExpired:
-            _kill_tree(proc)
-            out, err = proc.communicate()
-            run.error = f"Turn timed out after {timeout}s."
+        finally:
+            if server is not None:
+                server.terminate()
+                try:
+                    server.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    server.kill()
         for line in out.decode("utf-8", errors="replace").splitlines():
             line = line.strip()
             if not line.startswith("{"):
@@ -299,20 +354,34 @@ class CodexAgent(CliAgent):
     INSTALL_HINT = "Install: npm install -g @openai/codex"
     LOGIN_HINT = "Sign in with your ChatGPT account: codex login (on a server: codex login --device-auth)"
 
+    def jailed(self) -> bool:
+        # Without Codex's own sandbox (it can't start inside Docker), its
+        # apply_patch tool could write files: jail the whole process instead.
+        return SETTINGS.codex_sandbox == "danger-full-access"
+
+    def writable_dirs(self) -> list[str]:
+        # Codex keeps its login and session files here.
+        return [os.environ.get("CODEX_HOME") or str(Path.home() / ".codex")]
+
     def command(self, workdir, mcp, web_search, resume_session):
-        env_table = "{" + ", ".join(f"{k} = {_toml_str(v)}" for k, v in mcp.env.items()) + "}"
+        if mcp.url:   # jailed: the league runs the tool server over HTTP
+            server = {"mcp_servers.arena.url": _toml_str(mcp.url),
+                      "mcp_servers.arena.bearer_token_env_var": _toml_str("ARENA_MCP_TOKEN")}
+        else:
+            env_table = "{" + ", ".join(f"{k} = {_toml_str(v)}" for k, v in mcp.env.items()) + "}"
+            server = {"mcp_servers.arena.command": _toml_str(Path(mcp.command).as_posix()),
+                      "mcp_servers.arena.args": "[" + ", ".join(_toml_str(a) for a in mcp.args) + "]",
+                      "mcp_servers.arena.env": env_table}
         overrides = {
             "approval_policy": _toml_str("never"),
             "model_reasoning_effort": _toml_str(SETTINGS.reasoning_effort),
             "web_search": _toml_str("live" if web_search else "disabled"),
             **{f"features.{f}": "false" for f in CODEX_DISABLED_FEATURES},
             "agents.enabled": "false",                          # no sub-agents
-            "mcp_servers.arena.command": _toml_str(Path(mcp.command).as_posix()),
+            **server,
             # Nobody is there to click "approve", and with approval_policy
             # "never" Codex would otherwise refuse every call to our tools.
             "mcp_servers.arena.default_tools_approval_mode": _toml_str("approve"),
-            "mcp_servers.arena.args": "[" + ", ".join(_toml_str(a) for a in mcp.args) + "]",
-            "mcp_servers.arena.env": env_table,
             "mcp_servers.arena.startup_timeout_sec": "60",
             "mcp_servers.arena.tool_timeout_sec": "300",
         }
@@ -337,6 +406,8 @@ class CodexAgent(CliAgent):
                 run.web_searches += 1
             elif t == "command_execution":
                 run.shell_commands += 1
+            elif t == "file_change":
+                run.file_changes += 1
             elif t in ("agent_message", "assistant_message"):
                 run.final_text = item.get("text", "") or run.final_text
         elif kind == "turn.completed":
@@ -368,9 +439,10 @@ def probe(agent: CliAgent) -> dict:
         pinged = result.exists() and json.loads(result.read_text(encoding="utf-8")).get("pinged", False)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
-    ok = bool(pinged) and run.shell_commands == 0 and run.error is None
+    ok = bool(pinged) and run.shell_commands == 0 and run.file_changes == 0 and run.error is None
     summary = (f"ping {'reached' if pinged else 'did NOT reach'} the arena tools; "
-               f"shell commands run: {run.shell_commands}; "
+               f"shell commands run: {run.shell_commands}; file changes: {run.file_changes}; "
+               + (f"jailed (Landlock); " if agent.jailed() else "")
                + (f"error: {run.error}; " if run.error else "")
                + f"model said: {run.final_text.strip()[:300]!r}")
     return {"ok": ok, "summary": summary, "run": run}

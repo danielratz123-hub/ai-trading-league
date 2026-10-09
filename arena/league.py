@@ -210,7 +210,8 @@ def _alert_turn(agent_id: str, week_no: int, accepted: bool, error: str | None, 
     where = f"{agent_id}, week {week_no}"
     errs = "; ".join(e.splitlines()[0] for e in last_errors if e)[:500]
     if shell:
-        alerts.send(f"SECURITY: {where}: the CLI ran {shell} shell command(s) despite the lockdown.", level="error")
+        alerts.send(f"SECURITY: {where}: the CLI ran {shell} shell command(s) / file change(s) despite the "
+                    f"lockdown.", level="error")
     if not accepted:
         alerts.send(f"Agent turn FAILED ({where}): {(error or '')[:500]}\nIts portfolio stays as it is this week.",
                     level="error")
@@ -377,7 +378,7 @@ def _run_cli_turn(conn, agent: CliAgent, week_no: int, decision_date: str, exec_
                  + "; ".join(e.splitlines()[0] for e in state.get("last_errors", []))[:400])
     else:
         error = runs[-1].error or stopped_reason(state.get("attempts", 0), state.get("last_errors", []))
-    shell = sum(r.shell_commands for r in runs)
+    shell = sum(r.shell_commands + r.file_changes for r in runs)
     searches = sum(r.web_searches for r in runs)
     usage = Usage()
     for r in runs:
@@ -409,7 +410,7 @@ def _run_cli_turn(conn, agent: CliAgent, week_no: int, decision_date: str, exec_
              usage.cache_write, usage.output, 0.0, _now(), turn_id))
         if shell:
             log_event(conn, "error", f"decide:{agent_id}",
-                      f"SECURITY: the CLI ran {shell} shell command(s) despite being locked down.")
+                      f"SECURITY: the CLI ran {shell} shell command(s) / file change(s) despite being locked down.")
         log_event(conn, "info" if accepted else "error", f"decide:{agent_id}",
                   f"week {week_no}: {'accepted' if accepted else 'failed'} via CLI"
                   f"{' - ' + error if error else ''}")

@@ -351,3 +351,88 @@ def test_cli_env_drops_every_secret_and_gives_each_cli_only_its_own_token(monkey
         assert env.get("CLAUDE_MODEL") == "x"            # ordinary settings still pass
     assert claude_env["CLAUDE_CODE_OAUTH_TOKEN"] == "secret-value"
     assert "CLAUDE_CODE_OAUTH_TOKEN" not in codex_env
+
+
+# ---------------------------------------------------------------- jail + HTTP tool server
+
+def test_tool_server_over_http_needs_the_token(tmp_path):
+    import secrets
+    import urllib.error
+    import urllib.request
+
+    from arena.agents.cli import _start_http_mcp
+    token = secrets.token_urlsafe(32)
+    launch = mcp_launch("-", "gpt", "2000-01-01", 0, 0, str(tmp_path / "r.json"), simulate=True, probe=True)
+    proc, url = _start_http_mcp(launch, token, tmp_path)
+    try:
+        def post(msg, auth=token):
+            req = urllib.request.Request(url, json.dumps(msg).encode(), method="POST",
+                                         headers={"Content-Type": "application/json",
+                                                  "Authorization": f"Bearer {auth}"})
+            with urllib.request.urlopen(req, timeout=20) as r:
+                return r.status, r.read()
+        with pytest.raises(urllib.error.HTTPError) as e:
+            post({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, auth="wrong")
+        assert e.value.code == 401
+        status, body = post({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}})
+        assert status == 200 and json.loads(body)["result"]["serverInfo"]["name"] == "arena"
+        assert post({"jsonrpc": "2.0", "method": "notifications/initialized"})[0] == 202
+        status, body = post({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "ping", "arguments": {}}})
+        assert json.loads(body)["result"]["content"][0]["text"] == "pong"
+        assert json.loads((tmp_path / "r.json").read_text())["pinged"] is True
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
+
+
+def test_codex_file_changes_are_counted_and_fail_the_probe():
+    from arena.agents.cli import CliRun
+    run = CliRun()
+    CodexAgent("gpt", "").parse_event({"type": "item.completed", "item": {"type": "file_change"}}, run)
+    assert run.file_changes == 1
+
+
+def test_codex_uses_http_and_the_jail_when_its_own_sandbox_is_off(tmp_path, monkeypatch):
+    import dataclasses
+
+    from arena.agents import cli
+    monkeypatch.setattr(cli, "SETTINGS", dataclasses.replace(cli.SETTINGS, codex_sandbox="danger-full-access"))
+    agent = CodexAgent("gpt", "")
+    assert agent.jailed() and any(".codex" in d or "CODEX" in d for d in agent.writable_dirs() + [os.environ.get("CODEX_HOME", ".codex")])
+    launch = McpLaunch("python", ["-m", "arena.mcp_server"], {}, url="http://127.0.0.1:5/mcp")
+    monkeypatch.setattr("arena.agents.cli.resolve_cli", lambda n, j: ["codex"])
+    argv = " ".join(agent.command(tmp_path, launch, False, None))
+    assert 'mcp_servers.arena.url="http://127.0.0.1:5/mcp"' in argv
+    assert 'bearer_token_env_var="ARENA_MCP_TOKEN"' in argv and "mcp_servers.arena.command" not in argv
+    monkeypatch.setattr(cli, "SETTINGS", dataclasses.replace(cli.SETTINGS, codex_sandbox="read-only"))
+    assert not CodexAgent("gpt", "").jailed()
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Landlock is Linux-only")
+def test_jail_allows_writes_only_in_the_given_folders(tmp_path):
+    from arena.agents.jail import abi_version, prefix
+    if abi_version() < 1:
+        pytest.skip("Landlock not available on this kernel")
+    ok_dir, other = tmp_path / "scratch", tmp_path / "data"
+    ok_dir.mkdir()
+    other.mkdir()
+    (other / "arena.db").write_text("precious")
+    code = "\n".join([
+        "import sys, pathlib",
+        "ok, other = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])",
+        "(ok / 'a.txt').write_text('fine')",
+        "for attempt in (lambda: (other / 'x.txt').write_text('no'),",
+        "                lambda: (other / 'arena.db').write_text('overwritten'),",
+        "                lambda: (other / 'arena.db').unlink()):",
+        "    try:",
+        "        attempt(); print('WRITE ALLOWED')",
+        "    except PermissionError:",
+        "        print('blocked')",
+        "print('read:', (other / 'arena.db').read_text())",
+    ])
+    out = subprocess.run(prefix([ok_dir]) + [sys.executable, "-c", code, str(ok_dir), str(other)],
+                         capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.count("blocked") == 3 and "WRITE ALLOWED" not in out.stdout
+    assert "read: precious" in out.stdout and (ok_dir / "a.txt").read_text() == "fine"
+    assert (other / "arena.db").read_text() == "precious"
