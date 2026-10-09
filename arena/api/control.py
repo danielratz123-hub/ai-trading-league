@@ -136,11 +136,16 @@ class SchedulerProcess:
         log_dir = Path(db_path()).resolve().parent / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         out = open(log_dir / "scheduler-console.log", "a", encoding="utf-8")
-        self.proc = subprocess.Popen(_cmd("scheduler"), cwd=PROJECT_ROOT, stdout=out, stderr=subprocess.STDOUT,
-                                     stdin=subprocess.DEVNULL,
-                                     creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
         if os.name == "nt":
+            self.proc = subprocess.Popen(_cmd("scheduler"), cwd=PROJECT_ROOT, stdout=out, stderr=subprocess.STDOUT,
+                                         stdin=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
             self._job = _kill_with_this_process(self.proc)
+        else:
+            # Its own process group (so stop() also ends the job it's running),
+            # and ARENA_PARENT_PID so it exits if this app dies (scheduler.py).
+            self.proc = subprocess.Popen(_cmd("scheduler"), cwd=PROJECT_ROOT, stdout=out, stderr=subprocess.STDOUT,
+                                         stdin=subprocess.DEVNULL, start_new_session=True,
+                                         env={**os.environ, "ARENA_PARENT_PID": str(os.getpid())})
 
     def stop(self) -> None:
         if not self.running():
@@ -148,8 +153,16 @@ class SchedulerProcess:
         if os.name == "nt":   # also stop jobs it started
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(self.proc.pid)], capture_output=True)
         else:
-            self.proc.terminate()
-        self.proc.wait(timeout=15)
+            import signal
+            try:
+                os.killpg(self.proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        try:
+            self.proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            self.proc.wait(timeout=5)
 
 
 def _kill_with_this_process(proc: subprocess.Popen):

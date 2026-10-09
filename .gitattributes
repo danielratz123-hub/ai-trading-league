@@ -1,0 +1,12 @@
+# Store text as LF in git. Linux scripts, the Dockerfile and the Caddyfile
+# must keep LF even when checked out on Windows (a CR breaks "#!/bin/sh"
+# and Caddy's parser); Windows batch files keep CRLF.
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.sh text eol=lf
+Dockerfile text eol=lf
+Caddyfile text eol=lf
+*.png binary
+*.docx binary
+*.db binary

@@ -112,3 +112,32 @@ def test_only_one_scheduler_per_league(tmp_path):
     lock.close()
     out = subprocess.run([sys.executable, "-c", code, str(db)], capture_output=True, text=True).stdout
     assert "GOT LOCK" in out          # released when the holder lets go
+
+
+def test_lock_is_released_when_the_holder_is_killed(tmp_path):
+    """A crash (SIGKILL / TerminateProcess: no cleanup code runs) must never
+    leave a stale lock behind. The lock file itself stays; only the OS lock
+    on it matters."""
+    import subprocess
+    import sys
+    from arena.scheduler import AlreadyRunning, single_instance_lock
+    db = tmp_path / "arena.db"
+    holder = subprocess.Popen(
+        [sys.executable, "-c",
+         "import sys, time; from arena.scheduler import single_instance_lock\n"
+         "l = single_instance_lock(sys.argv[1]); print('HELD', flush=True); time.sleep(120)", str(db)],
+        stdout=subprocess.PIPE, text=True)
+    try:
+        assert holder.stdout.readline().strip() == "HELD"
+        try:
+            single_instance_lock(db, wait_seconds=0)
+            raise AssertionError("second scheduler got the lock while the first was alive")
+        except AlreadyRunning:
+            pass
+        holder.kill()                 # hard kill, like a crash or `docker kill`
+        holder.wait(timeout=10)
+    finally:
+        if holder.poll() is None:
+            holder.kill()
+    assert (tmp_path / "scheduler.lock").exists()
+    single_instance_lock(db).close()  # a restart starts normally

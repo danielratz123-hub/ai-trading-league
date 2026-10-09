@@ -22,6 +22,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -183,35 +184,84 @@ class AlreadyRunning(RuntimeError):
     pass
 
 
-def single_instance_lock(db_path: str | Path):
-    """Hold an exclusive lock on <data>/scheduler.lock for as long as this
+def single_instance_lock(db_path: str | Path, wait_seconds: float = 5.0):
+    """Hold an exclusive OS lock on <data>/scheduler.lock for as long as this
     process lives. Two schedulers on one league could run the same job at the
-    same moment, so a second one refuses to start. The OS releases the lock
-    when the process ends, even if it crashes."""
+    same moment, so a second one refuses to start.
+
+    The lock belongs to the process, not to the file: the kernel drops it when
+    the process ends, even on a crash or `docker kill`, so there is never a
+    stale lock to clean up (the empty file staying behind is harmless).
+    Windows releases a dead process's lock "when resources allow", usually
+    within a second, hence the short retry before giving up.
+
+    This only protects one machine. It can't see a scheduler on another
+    computer (see MIGRATION.md)."""
     path = Path(db_path).resolve().parent / "scheduler.lock"
     f = open(path, "a+")
     f.seek(0)
-    try:
-        if os.name == "nt":
-            import msvcrt
-            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
-            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        f.close()
-        raise AlreadyRunning("Another scheduler is already running for this league.") from None
-    return f   # keep a reference: closing it releases the lock
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        try:
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return f   # keep a reference: closing it releases the lock
+        except OSError:
+            if time.monotonic() >= deadline:
+                f.close()
+                raise AlreadyRunning("Another scheduler is already running for this league.") from None
+            time.sleep(0.25)
+
+
+_STOP = threading.Event()
+
+
+def _request_stop(signum, frame) -> None:
+    """SIGTERM (docker stop, systemd, the app shutting down): finish the job
+    that is running, if any, then exit. Every job is safe to re-run, so even
+    a hard kill only means the job runs again after the restart."""
+    log.info("stop requested (signal %s); exiting after the current job", signum)
+    _STOP.set()
+
+
+def _die_with_parent() -> None:
+    """When the dashboard app started us (ARENA_PARENT_PID), stop when it
+    stops, so closing the app never leaves a scheduler running on its own.
+    Windows does this with a Job Object in control.py. On Linux the kernel
+    sends us SIGTERM when the parent dies (PR_SET_PDEATHSIG); the per-tick
+    parent check below covers other systems and the race at startup."""
+    if not os.getenv("ARENA_PARENT_PID") or not sys.platform.startswith("linux"):
+        return
+    import ctypes
+    import signal
+    PR_SET_PDEATHSIG = 1
+    ctypes.CDLL(None, use_errno=True).prctl(PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0)
+
+
+def _parent_gone() -> bool:
+    want = os.getenv("ARENA_PARENT_PID")
+    return bool(want) and os.name != "nt" and os.getppid() != int(want)
 
 
 def run_forever(db_path: str | Path = SETTINGS.db_path, tick_seconds: int = 30) -> None:
     lock = single_instance_lock(db_path)   # noqa: F841 - held until the process exits
+    import signal
+    signal.signal(signal.SIGTERM, _request_stop)
+    _die_with_parent()
     conn = connect(db_path)
     log_dir = Path(db_path).resolve().parent / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log.info("scheduler started (US/Eastern now %s); logs in %s", datetime.now(ET).strftime("%Y-%m-%d %H:%M"), log_dir)
-    while True:
+    while not _STOP.is_set() and not _parent_gone():
         started = conn.execute("SELECT 1 FROM agents LIMIT 1").fetchone() is not None
         for job in due_jobs(datetime.now(ET), _calendar(conn), _history(conn), started):
+            if _STOP.is_set():
+                break
             run_job(conn, job, log_dir, Path(db_path).resolve())
-        time.sleep(tick_seconds)
+        _STOP.wait(tick_seconds)
+    log.info("scheduler stopped")
+    conn.close()

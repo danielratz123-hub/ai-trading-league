@@ -1,6 +1,7 @@
 """The sandbox must contain agent code: no files, no network, no processes,
 no secrets, bounded CPU and memory."""
 import os
+import sys
 
 import numpy as np
 import pandas as pd
@@ -42,6 +43,7 @@ def test_normal_analysis_works(data):
     ("[c for c in ().__class__.__base__.__subclasses__() if c.__name__ == 'Popen'][0](['echo'])",
      "'subprocess.Popen' is not allowed"),
     ("prices.to_csv('out.csv')", "file access is not allowed"),
+    ("import pandas as pd\npd.io.common.os.spawnv(0, 'python', ['python'])", "'os.spawn' is not allowed"),
 ])
 def test_escapes_are_blocked(data, code, expected):
     r = run(code, data)
@@ -84,3 +86,35 @@ def test_agent_cannot_fake_the_result(data):
     # because the real marker is random and unknown to the agent code.
     r = run("print('@@RESULT_0000@@{\"ok\": true, \"stdout\": \"hacked\"}')", data)
     assert r.ok and "hacked" in r.stdout and r.stdout.startswith("@@RESULT_0000@@")
+
+
+def test_refuses_when_a_limit_cannot_be_enforced(data):
+    for name in ("RLIMIT_CPU", "RLIMIT_AS", "RLIMIT_NPROC"):
+        r = run_code("analysis", "print('ran')", data, UNIVERSE, "2024-02-09", limits=FAST,
+                     _simulate_limit_failure=name)
+        assert not r.ok and r.refused and "refused" in r.error and "ran" not in r.stdout
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="setrlimit path is Linux-only")
+def test_linux_kernel_limits_hold_without_the_audit_hook():
+    """The kernel limits must hold on their own, even if the audit hook were
+    somehow bypassed: after _apply_limits, fork fails and the caps read back."""
+    import subprocess
+    probe = "\n".join([
+        "import os, resource, sys",
+        "sys.path.insert(0, sys.argv[1])",
+        "from child import _apply_limits",
+        "_apply_limits(7, 512)",
+        "assert resource.getrlimit(resource.RLIMIT_CPU) == (7, 8)",
+        "assert resource.getrlimit(resource.RLIMIT_AS)[0] == 512 * 1024 * 1024",
+        "assert resource.getrlimit(resource.RLIMIT_NPROC) == (1, 1)",
+        "try:",
+        "    os.fork()",
+        "except OSError:",
+        "    print('fork blocked')",
+    ])
+    from arena.sandbox.runner import CHILD
+    out = subprocess.run([sys.executable, "-c", probe, str(CHILD.parent)],
+                         capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    assert "fork blocked" in out.stdout

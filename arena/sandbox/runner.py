@@ -1,8 +1,11 @@
 """Parent side of the sandbox: start child.py with limits and collect its result.
 
 Agent code NEVER runs in this process. We only ever pass it as text to a
-separate Python process that has no secrets in its environment, a CPU-time
-and memory cap, a wall-clock timeout, and the audit-hook lockdown in child.py.
+separate Python process that has no secrets in its environment, CPU-time,
+memory and process-count caps, a wall-clock timeout, and the audit-hook
+lockdown in child.py. The caps come from a Job Object on Windows (set here)
+and from setrlimit on Linux (set and verified by child.py, which refuses to
+run the code if any of them doesn't hold).
 
 On Linux, where the kernel allows unprivileged user namespaces, the child
 also runs in its own empty network namespace (`unshare -rn`): it has no
@@ -12,6 +15,7 @@ Windows, or Docker's default seccomp profile), the other layers still apply.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import secrets
 import shutil
@@ -25,6 +29,7 @@ from pathlib import Path
 import pandas as pd
 
 CHILD = Path(__file__).with_name("child.py")
+log = logging.getLogger("arena.sandbox")
 
 
 @dataclass(frozen=True)
@@ -42,6 +47,7 @@ class SandboxResult:
     error: str | None = None
     weights: dict[str, float] | None = None
     series: dict[str, dict[str, float]] = field(default_factory=dict)
+    refused: bool = False       # an OS limit couldn't be enforced; nothing ran
 
 
 def child_env(workdir: str) -> dict[str, str]:
@@ -81,6 +87,7 @@ def run_code(
     date: str,
     dates: list[str] | None = None,
     limits: SandboxLimits = SandboxLimits(),
+    _simulate_limit_failure: str = "",
 ) -> SandboxResult:
     """mode: 'analysis' (run_python), 'strategy' (one target_weights call),
     or 'strategy_series' (target_weights for each date in `dates`)."""
@@ -91,6 +98,7 @@ def run_code(
         "date": date, "dates": dates or [], "marker": marker,
         "cpu_seconds": limits.cpu_seconds, "mem_mb": limits.mem_mb,
         "max_output": limits.max_output_chars,
+        "simulate_limit_failure": _simulate_limit_failure,
     }
     proc = subprocess.Popen(
         no_network_prefix() + [sys.executable, "-I", str(CHILD)],
@@ -113,9 +121,12 @@ def run_code(
     if marker not in text:
         return SandboxResult(False, error=_explain_crash(proc.returncode, err, limits))
     payload = json.loads(text.rsplit(marker, 1)[1].strip().splitlines()[0])
+    if payload.get("refused"):
+        log.error("sandbox refused to run: %s", payload.get("error"))
     return SandboxResult(
         ok=payload["ok"], stdout=payload.get("stdout", ""), error=payload.get("error"),
         weights=payload.get("weights"), series=payload.get("series") or {},
+        refused=bool(payload.get("refused")),
     )
 
 

@@ -6,8 +6,10 @@ This file must stay self-contained: it must never import the `arena`
 package, because arena.config loads .env (API keys) into the environment.
 
 Lockdown layers, in order:
-  1. The parent gives us an environment with no secrets, a temp working
-     dir, and OS limits (CPU time, memory).
+  1. The parent gives us an environment with no secrets and a temp working
+     dir. OS limits on CPU time, memory and new processes come from a Job
+     Object (Windows, set by the parent) or setrlimit (Linux, set here).
+     If any limit can't be enforced, nothing runs.
   2. We load the price data and import pandas/numpy FIRST, while file access
      is still allowed.
   3. We install an audit hook. Audit hooks are checked inside CPython's C
@@ -45,14 +47,54 @@ BLOCKED_MODULES = {
 }
 
 
-def _apply_unix_limits(cpu_seconds: int, mem_mb: int) -> None:
+class LimitsUnavailable(RuntimeError):
+    """A required OS limit could not be put in place: refuse to run."""
+
+
+def _apply_limits(cpu_seconds: int, mem_mb: int, simulate_failure: str = "") -> None:
+    """CPU time, address space and "no new processes" via setrlimit.
+
+    On Windows the parent already put us in a Job Object with the same three
+    limits, so there is nothing to do here. Everywhere else, each limit is
+    set AND then checked; if any of them didn't take, we refuse to run the
+    agent's code at all rather than run it with fewer protections.
+    """
+    if os.name == "nt":
+        if simulate_failure:        # tests only: exercise the refusal path
+            raise LimitsUnavailable(f"{simulate_failure} could not be set (simulated)")
+        return
     try:
         import resource
-    except ImportError:  # Windows: parent uses a Job Object instead
-        return
-    resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds + 1))
+    except ImportError:
+        raise LimitsUnavailable("the resource module is missing") from None
     mem = mem_mb * 1024 * 1024
-    resource.setrlimit(resource.RLIMIT_AS, (mem, mem))
+    wanted = {
+        "RLIMIT_CPU": (cpu_seconds, cpu_seconds + 1),
+        "RLIMIT_AS": (mem, mem),
+        # Count of processes for this user: 1 (or anything already reached)
+        # means fork()/clone() fail. Existing processes are not affected.
+        "RLIMIT_NPROC": (1, 1),
+    }
+    for name, (soft, hard) in wanted.items():
+        res = getattr(resource, name, None)
+        try:
+            if res is None or name == simulate_failure:
+                raise OSError("not supported on this system")
+            resource.setrlimit(res, (soft, hard))
+            if resource.getrlimit(res) != (soft, hard):
+                raise OSError(f"read back {resource.getrlimit(res)}")
+        except (OSError, ValueError) as e:
+            raise LimitsUnavailable(f"{name} could not be set ({e})") from None
+    # RLIMIT_NPROC is ignored for privileged processes (real root with
+    # CAP_SYS_RESOURCE / CAP_SYS_ADMIN). Prove it works: a fork must fail.
+    try:
+        pid = os.fork()
+    except OSError:
+        return                      # good: no new processes possible
+    if pid == 0:
+        os._exit(0)
+    os.waitpid(pid, 0)
+    raise LimitsUnavailable("RLIMIT_NPROC is not enforced (is the sandbox running as root?)")
 
 
 def _make_audit_hook(read_roots: list[str]):
@@ -122,7 +164,15 @@ def _check_weights(w, universe) -> dict:
 def main() -> None:
     real_stdout = sys.stdout
     job = json.loads(sys.stdin.read())
-    _apply_unix_limits(job["cpu_seconds"], job["mem_mb"])
+    try:
+        _apply_limits(job["cpu_seconds"], job["mem_mb"], job.get("simulate_limit_failure", ""))
+    except LimitsUnavailable as e:
+        # No agent code has run. The parent turns this into a refusal.
+        real_stdout.write("\n" + job["marker"] + json.dumps(
+            {"ok": False, "refused": True, "stdout": "",
+             "error": f"Sandbox refused to run: {e}. The code was not executed."}) + "\n")
+        real_stdout.flush()
+        return
 
     # --- load data while file access is still allowed -------------------
     import numpy as np  # noqa: F401  (pre-import so lazy loads are rare)
