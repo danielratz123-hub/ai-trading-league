@@ -365,6 +365,7 @@ touching the live league: `./scripts/restore.sh latest --test`.
 |---|---|---|
 | `execute` | every trading day, 09:50 | fills orders at the open (Alpaca's free data lags 15 min) |
 | `daily` | every trading day, 45 min after the close | 16:45, or 13:45 on half days |
+| `reports` | trading days from 10:15, after a successful `execute` | each agent's weekly strategy report for the week just scored |
 | `backup` | every day, 17:30 | after `daily` |
 | `decide` | the morning after the week's last trading day, 10:00 | normally Saturday |
 | `check-logins` | every day 07:00, and Saturday 08:00 | 2 hours before decide |
@@ -383,7 +384,19 @@ docker compose logs -f engine                      # the scheduler
 docker compose exec engine python -m arena.main status
 docker compose exec engine python -m arena.main health --scheduler
 docker compose restart engine                      # after changing .env: docker compose up -d
+docker compose exec engine python -m arena.main refresh-universe   # current S&P 500 list (a few times a year)
+docker compose exec engine python -m arena.main reports --week 3 --force   # rewrite a strategy report
 ```
+
+**S&P 500 changes.** `refresh-universe` downloads the current list (from the
+`datasets/s-and-p-500-companies` dataset on GitHub, or `--source <csv>`),
+records its date (shown on the dashboard and in the briefing) and prints
+what was added and removed. New tickers get their price history right away.
+A ticker that left the index is never force-sold: an agent holding it may
+keep or reduce the position, not add to it, and it keeps getting prices.
+
+**Data feed.** `ALPACA_DATA_FEED=iex` (free plan) or `sip` (paid). It's the
+only place the feed is set; the dashboard shows which one is used.
 
 Update: `git pull ~/league.bundle vps-deploy && docker compose up -d --build`.
 The data and logins are in volumes and survive.
