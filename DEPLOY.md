@@ -403,14 +403,21 @@ The data and logins are in volumes and survive.
 
 ## Codex's sandbox in Docker
 
-Codex runs with `--sandbox read-only`. On Linux it uses kernel features
-(Landlock/seccomp, and user namespaces via bubblewrap) to enforce that.
-What this needs inside Docker, and what was verified, is recorded in the
-Technical Report ("Deployment"). If `check-agents --probe` reports that
-Codex's sandbox can't start, set `CODEX_SANDBOX=danger-full-access` in
-`.env`: Codex's shell, patch and file tools are switched off by our own
-configuration, so the model still can't run commands; the container
-(non-root, all capabilities dropped) is then the boundary.
+Codex's `--sandbox read-only` uses bubblewrap (Linux user namespaces). Tested
+on the Ubuntu 24.04 VPS, it can't start inside a container: with Docker's
+defaults it can't create a namespace; with seccomp **and** AppArmor both
+unconfined it still fails setting up its network namespace ("Failed
+RTM_NEWADDR"), with or without extra capabilities. Only `--privileged` would
+work, and that would remove the container's own protection for everything
+in it, so it's not used.
+
+Instead, the Compose file sets `CODEX_SANDBOX=danger-full-access` for the
+server services. This is safe here because Codex's shell, command runner,
+patch tool, connectors, sub-agents, browser and plugins are all switched off
+by `arena/agents/cli.py` (so the model can't run commands or edit files),
+and the probe turn checks that no shell command was run. The boundary is the
+container: non-root, all capabilities dropped, `no-new-privileges`, no
+secrets in Codex's environment.
 
 ## Security
 

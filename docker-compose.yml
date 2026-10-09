@@ -24,6 +24,13 @@ x-common: &common
 
 x-server-env: &server-env
   ARENA_SERVER: "1"                    # login + ADMIN_TOKEN required, see arena/api/auth.py
+  # Codex's own Linux sandbox (bubblewrap) can't start inside a Docker
+  # container: it was tested on Ubuntu 24.04 and fails even with seccomp and
+  # AppArmor both off; only --privileged would work, which would weaken the
+  # whole container. Codex's shell, patch and file tools are switched off by
+  # arena/agents/cli.py anyway, and the container (non-root, no capabilities,
+  # no-new-privileges) is the boundary. See DEPLOY.md.
+  CODEX_SANDBOX: danger-full-access
 
 services:
   caddy:
