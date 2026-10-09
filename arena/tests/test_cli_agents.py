@@ -87,6 +87,9 @@ class FakeCli(CliAgent):
         super().__init__(agent_id, "fake")
         self.runs, self.run_no, self.resumed = runs, 0, []
 
+    def check_login(self):
+        return True, "fake login"
+
     def command(self, workdir, mcp, web_search, resume_session):
         self.resumed.append(resume_session)
         plan = workdir / "plan.json"
@@ -276,3 +279,75 @@ def test_model_catalog_live_and_fallback(monkeypatch):
     c = models.catalog()
     assert c["gpt_source"] == "built-in" and c["gpt"] == models.GPT_FALLBACK
     models._cache.clear()
+
+
+class LoggedOutCli(FakeCli):
+    """Simulates a CLI whose login is missing (fails the cheap check) or
+    expires during the turn (passes the check, then the run errors out)."""
+
+    def __init__(self, agent_id, runs, check_ok=False, run_error=None):
+        super().__init__(agent_id, runs)
+        self.check_ok, self.run_error = check_ok, run_error
+
+    def check_login(self):
+        return (True, "ok") if self.check_ok else (False, "Not logged in. Please run /login")
+
+    def run(self, *a, **k):
+        if self.run_error:
+            from arena.agents.cli import CliRun
+            return CliRun(error=self.run_error)
+        return super().run(*a, **k)
+
+
+def test_login_problem_at_decide_alerts_and_retries_instead_of_skipping(db_file, monkeypatch):
+    from arena import alerts
+    sent = []
+    monkeypatch.setattr(alerts, "_sender", lambda msg: sent.append(msg) or True)
+    monkeypatch.setenv("ARENA_DB", str(db_file[0]))
+    path, conn = db_file
+    gpt = FakeCli("gpt", [[list(submit([]))]])
+    broken = LoggedOutCli("claude", [])
+    with pytest.raises(league.LoginProblem) as e:
+        league.decide(conn, WEEK1, factory=lambda a: {"claude": broken, "gpt": gpt}[a])
+    assert "claude" in e.value.problems and "gpt" not in e.value.problems
+    assert sent and "LOGIN PROBLEM" in sent[0] and "claude" in sent[0]
+    # Not counted as a failed turn, and the week is NOT marked decided.
+    assert conn.execute("SELECT COUNT(*) FROM agent_turns WHERE agent_id='claude'").fetchone()[0] == 0
+    assert conn.execute("SELECT status FROM weeks").fetchone()[0] == "deciding"
+    assert conn.execute("SELECT status FROM agent_turns WHERE agent_id='gpt'").fetchone()[0] == "accepted"
+
+    # The login breaks mid-turn: same treatment.
+    expired = LoggedOutCli("claude", [], check_ok=True, run_error="API Error: 401 OAuth token has expired")
+    with pytest.raises(league.LoginProblem):
+        league.decide(conn, WEEK1, factory=lambda a: {"claude": expired, "gpt": gpt}[a])
+    assert conn.execute("SELECT COUNT(*) FROM agent_turns WHERE agent_id='claude'").fetchone()[0] == 0
+
+    # Fixed: the retry runs only Claude's turn and finishes the week.
+    fixed = FakeCli("claude", [[list(submit([manual(1, 1.0, {"AAPL": 0.25})]))]])
+    reports = league.decide(conn, WEEK1, factory=lambda a: {"claude": fixed, "gpt": gpt}[a])
+    assert [r.status for r in reports] == ["accepted", "already accepted"]
+    assert conn.execute("SELECT status FROM weeks").fetchone()[0] == "decided"
+
+
+def test_an_agent_mistake_is_not_mistaken_for_a_login_problem(db_file):
+    path, conn = db_file
+    # Never submits: an ordinary failed turn, even though nothing logged in went wrong.
+    claude = FakeCli("claude", [[["market_overview", {}]], [["market_overview", {}]], []])
+    gpt = FakeCli("gpt", [[list(submit([]))]])
+    reports = league.decide(conn, WEEK1, factory=lambda a: {"claude": claude, "gpt": gpt}[a])
+    assert reports[0].status == "failed"
+    assert conn.execute("SELECT status FROM weeks").fetchone()[0] == "decided"
+
+
+def test_cli_env_drops_every_secret_and_gives_each_cli_only_its_own_token(monkeypatch):
+    secrets = ["ALPACA_MIRROR_CLAUDE_KEY", "ALPACA_MIRROR_GPT_SECRET", "ADMIN_TOKEN", "TELEGRAM_BOT_TOKEN",
+               "B2_APPLICATION_KEY", "DASHBOARD_PASSWORD_HASH", "SESSION_SECRET", "BACKUP_S3_SECRET_ACCESS_KEY"]
+    for k in secrets + ["CLAUDE_CODE_OAUTH_TOKEN"]:
+        monkeypatch.setenv(k, "secret-value")
+    monkeypatch.setenv("CLAUDE_MODEL", "x")
+    claude_env, codex_env = ClaudeCodeAgent("claude", "").env(), CodexAgent("gpt", "").env()
+    for env in (claude_env, codex_env):
+        assert not set(secrets) & set(env)
+        assert env.get("CLAUDE_MODEL") == "x"            # ordinary settings still pass
+    assert claude_env["CLAUDE_CODE_OAUTH_TOKEN"] == "secret-value"
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in codex_env

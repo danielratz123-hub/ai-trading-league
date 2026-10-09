@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -26,8 +27,13 @@ from .base import Usage
 
 # Never hand secrets to the CLI process. Removing the provider API keys also
 # makes sure each CLI uses the subscription login, not pay-per-token billing.
+# Besides these names, anything that LOOKS like a secret (…KEY, …SECRET,
+# …TOKEN, …PASSWORD…) is removed too, so a new secret added to .env later
+# (mirror keys, Telegram, backups, the dashboard password) is never passed
+# on by accident. Each CLI gets back only its own login token (ALLOW_ENV).
 SECRET_ENV = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ALPACA_API_KEY", "ALPACA_SECRET_KEY",
               "CODEX_API_KEY")
+_SECRET_NAME = re.compile(r"(KEY|SECRET|TOKEN|PASSWORD|PASSWD|HASH|CREDENTIAL)", re.I)
 
 
 @dataclass
@@ -79,10 +85,24 @@ def resolve_cli(name: str, npm_js: list[str]) -> list[str]:
     return [exe]
 
 
-def _clean_env(extra: dict[str, str] | None = None) -> dict[str, str]:
-    env = {k: v for k, v in os.environ.items() if k not in SECRET_ENV}
+def _clean_env(extra: dict[str, str] | None = None, allow: tuple[str, ...] = ()) -> dict[str, str]:
+    env = {k: v for k, v in os.environ.items()
+           if k in allow or (k not in SECRET_ENV and not _SECRET_NAME.search(k))}
     env.update(extra or {})
     return env
+
+
+# What a CLI prints when its sign-in is missing, expired or revoked. Used to
+# tell "the login is broken" (retry after you fix it) from "the agent made a
+# bad decision" (the turn counts as failed).
+_LOGIN_ERROR = re.compile(
+    r"(not (logged|signed) in|please run /login|run `?(claude|codex) login|invalid api key|"
+    r"oauth token (has )?(expired|revoked)|authentication[_ ](error|failed)|unauthori[sz]ed|\b401\b|"
+    r"refresh token|login required|token (is )?expired)", re.I)
+
+
+def looks_like_login_error(text: str | None) -> bool:
+    return bool(text) and bool(_LOGIN_ERROR.search(text))
 
 
 def _kill_tree(proc: subprocess.Popen) -> None:
@@ -184,7 +204,8 @@ class ClaudeCodeAgent(CliAgent):
     CLI_NAME = "claude"
     LOGIN_CMD = ["auth", "status"]
     INSTALL_HINT = "Install or update: npm install -g @anthropic-ai/claude-code  (or: claude update)"
-    LOGIN_HINT = "Sign in with your Claude subscription: claude auth login"
+    LOGIN_HINT = ("Sign in with your Claude subscription: claude auth login "
+                  "(on a server: claude setup-token, then CLAUDE_CODE_OAUTH_TOKEN in .env)")
 
     def check_login(self):
         code, text = self._quick(self.LOGIN_CMD)
@@ -200,7 +221,10 @@ class ClaudeCodeAgent(CliAgent):
 
     def env(self):
         # Backtests can take a while; give MCP tools 5 minutes.
-        return _clean_env({"MCP_TOOL_TIMEOUT": "300000", "MCP_TIMEOUT": "60000"})
+        # CLAUDE_CODE_OAUTH_TOKEN: the long-lived subscription token from
+        # `claude setup-token` (headless servers). Only Claude Code gets it.
+        return _clean_env({"MCP_TOOL_TIMEOUT": "300000", "MCP_TIMEOUT": "60000"},
+                          allow=("CLAUDE_CODE_OAUTH_TOKEN",))
 
     def command(self, workdir, mcp, web_search, resume_session):
         cfg = workdir / "mcp.json"
@@ -271,7 +295,7 @@ class CodexAgent(CliAgent):
     CLI_NAME = "codex"
     LOGIN_CMD = ["login", "status"]
     INSTALL_HINT = "Install: npm install -g @openai/codex"
-    LOGIN_HINT = "Sign in with your ChatGPT account: codex login"
+    LOGIN_HINT = "Sign in with your ChatGPT account: codex login (on a server: codex login --device-auth)"
 
     def command(self, workdir, mcp, web_search, resume_session):
         env_table = "{" + ", ".join(f"{k} = {_toml_str(v)}" for k, v in mcp.env.items()) + "}"

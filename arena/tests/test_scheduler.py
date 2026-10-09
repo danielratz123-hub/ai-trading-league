@@ -21,8 +21,10 @@ def at(s: str) -> datetime:
     return datetime.fromisoformat(s).replace(tzinfo=ET)
 
 
-def names(now, history=None, started=True, cal=CAL):
-    return [(j.name, j.key) for j in due_jobs(at(now), cal, history or {}, started)]
+def names(now, history=None, started=True, cal=CAL, checks=False):
+    """Due jobs; the login checks are left out unless `checks`."""
+    return [(j.name, j.key) for j in due_jobs(at(now), cal, history or {}, started)
+            if checks or j.name != "check-logins"]
 
 
 def test_execute_runs_at_0950_eastern_only_on_trading_days():
@@ -141,3 +143,37 @@ def test_lock_is_released_when_the_holder_is_killed(tmp_path):
             holder.kill()
     assert (tmp_path / "scheduler.lock").exists()
     single_instance_lock(db).close()  # a restart starts normally
+
+
+def test_login_checks_daily_and_two_hours_before_decide():
+    from arena.scheduler import TEMPFAIL
+    assert ("check-logins", "daily-2024-03-11") not in names("2024-03-11 06:59", checks=True)
+    assert ("check-logins", "daily-2024-03-11") in names("2024-03-11 07:00", checks=True)
+    # Never ahead of execute: a slow probe mustn't delay the open.
+    monday = names("2024-03-11 09:50", checks=True)
+    assert monday.index(("execute", "2024-03-11")) < monday.index(("check-logins", "daily-2024-03-11"))
+    # Saturday: decide is at 10:00, so the pre-decide check is due from 08:00.
+    assert ("check-logins", "pre-decide-2024-03-08") not in names("2024-03-09 07:59", checks=True)
+    assert ("check-logins", "pre-decide-2024-03-08") in names("2024-03-09 08:00", checks=True)
+    assert ("check-logins", "pre-decide-2024-03-08") not in names("2024-03-09 10:00", checks=True)
+    assert TEMPFAIL == 75
+
+
+def test_decide_with_a_login_problem_retries_until_the_window_closes():
+    from arena.scheduler import TEMPFAIL
+    # Exit 75 = login problem: retried every 30 minutes, never "given up".
+    runs = [{"exit_code": TEMPFAIL, "started_at": at("2024-03-09 10:00")}] * (MAX_ATTEMPTS + 5)
+    hist = {("decide", "2024-03-08"): runs}
+    assert ("decide", "2024-03-08") not in names("2024-03-09 10:10", hist)       # waits 30 min
+    assert ("decide", "2024-03-08") in names("2024-03-09 10:30", hist)
+    assert ("decide", "2024-03-08") in names("2024-03-10 22:00", hist)            # Sunday night too
+    assert ("decide", "2024-03-08") not in names("2024-03-11 09:30", hist)        # window closed
+    # Ordinary failures still give up after MAX_ATTEMPTS.
+    hard = {("decide", "2024-03-08"): [{"exit_code": 1, "started_at": at("2024-03-09 10:00")}] * MAX_ATTEMPTS}
+    assert ("decide", "2024-03-08") not in names("2024-03-09 12:00", hard)
+
+
+def test_check_logins_job_says_why_it_runs():
+    from arena.scheduler import Job
+    argv = Job("check-logins", "pre-decide-2024-03-08", None).argv("arena.db")
+    assert argv[-2:] == ["--reason", "pre-decide-2024-03-08"]

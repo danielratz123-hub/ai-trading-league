@@ -17,15 +17,15 @@ import tempfile
 
 import pandas as pd
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
-from . import ledger, risk, scoring
+from . import alerts, ledger, risk, scoring
 from .agents import make_agent
 from .agents import briefing as brief
 from .agents.base import AgentAdapter, TurnOutcome, Usage, run_turn, stopped_reason, to_json
-from .agents.cli import CliAgent, CliRun, mcp_launch
+from .agents.cli import CliAgent, CliRun, looks_like_login_error, mcp_launch
 from .agents.decision import check, targets_from_json, targets_to_json
 from .config import SETTINGS
 from .db import connect, log_event, transaction
@@ -35,6 +35,16 @@ from .tools.registry import Budget, ToolBox
 from .trading_calendar import next_trading_day, trading_days
 
 AgentFactory = Callable[[str], "AgentAdapter | CliAgent"]
+
+
+class LoginProblem(RuntimeError):
+    """An agent's CLI isn't signed in (or its login expired) at decide time.
+    Not the agent's fault, so its turn is NOT counted as failed: the week
+    stays 'deciding' and the scheduler retries decide until it's fixed."""
+
+    def __init__(self, problems: dict[str, str]):
+        self.problems = problems
+        super().__init__("; ".join(f"{a}: {msg}" for a, msg in problems.items()))
 
 
 class LeagueError(RuntimeError):
@@ -143,6 +153,7 @@ def decide(conn: sqlite3.Connection, decision_date: str | None = None, simulate:
                 raise LeagueError(f"Week {week_no} ({decision_date}) is already {row['status']}.")
 
     reports = []
+    login_problems: dict[str, str] = {}
     for agent_id in ledger.agent_ids(conn):
         done = conn.execute("SELECT id, status FROM agent_turns WHERE week_no=? AND agent_id=?",
                             (week_no, agent_id)).fetchone()
@@ -162,12 +173,44 @@ def decide(conn: sqlite3.Connection, decision_date: str | None = None, simulate:
             except Exception as e:  # noqa: BLE001 - one agent without an adapter mustn't stop the rest
                 reports.append(TurnReport(agent_id, "failed", 0, 0, 0, 0, f"No adapter: {e}"))
                 continue
-        run = _run_cli_turn if isinstance(adapter, CliAgent) else _run_agent_turn
-        reports.append(run(conn, adapter, week_no, decision_date, exec_date, simulate))
+        if isinstance(adapter, CliAgent):
+            # Cheap check first (no plan usage): a missing or expired login
+            # must not be recorded as the agent failing its turn.
+            ok, msg = adapter.check_login()
+            if not ok:
+                _login_problem(conn, login_problems, agent_id, week_no, msg)
+                continue
+            report = _run_cli_turn(conn, adapter, week_no, decision_date, exec_date, simulate)
+            if (report.status == "failed" and report.attempts == 0 and report.tool_calls == 0
+                    and looks_like_login_error(report.error)):
+                # The login broke during the turn (the CLI never got as far
+                # as using a tool): forget the turn, retry later.
+                with transaction(conn):
+                    conn.execute("DELETE FROM agent_turns WHERE week_no=? AND agent_id=?", (week_no, agent_id))
+                _login_problem(conn, login_problems, agent_id, week_no, report.error or "")
+                continue
+            reports.append(report)
+        else:
+            reports.append(_run_agent_turn(conn, adapter, week_no, decision_date, exec_date, simulate))
 
+    if login_problems:
+        # Leave the week 'deciding'. Agents that finished keep their result;
+        # the next decide run only redoes the ones with a login problem.
+        raise LoginProblem(login_problems)
     with transaction(conn):
         conn.execute("UPDATE weeks SET status='decided' WHERE week_no=?", (week_no,))
     return reports
+
+
+def _login_problem(conn, problems: dict[str, str], agent_id: str, week_no: int, msg: str) -> None:
+    problems[agent_id] = msg[:300]
+    with transaction(conn):
+        log_event(conn, "error", f"decide:{agent_id}",
+                  f"week {week_no}: login problem, turn not run (will retry): {msg[:300]}")
+    alerts.send(f"LOGIN PROBLEM at decide time: {agent_id} (week {week_no}).\n{msg[:300]}\n"
+                f"Its turn was NOT run and is not counted as failed. Fix the login (DEPLOY.md, "
+                f"'Sign the agents in'); the scheduler retries decide every 30 minutes until Monday's open.",
+                level="error", key=f"decide-login-{agent_id}-{week_no}", every=timedelta(hours=2))
 
 
 def skip_stale_weeks(conn: sqlite3.Connection, decision_date: str) -> list[int]:

@@ -77,31 +77,77 @@ In `.env` set at least: `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, `ADMIN_TOKEN`
 
 ### 2. Sign the agents in (subscriptions, no API bills)
 
-**Claude:** on your PC, run `claude setup-token`. It prints a long-lived token
-for your Claude subscription. Put it in the VPS `.env`:
+The server has no browser, so both CLIs use a login that works without one.
+Your subscriptions are used exactly as on the PC; no API keys, no token bills.
 
-```
-CLAUDE_CODE_OAUTH_TOKEN=...
-```
+**Claude Code: a long-lived token (`claude setup-token`)**
 
-**Codex:** sign in once inside the container with the device-code flow (open
-the printed URL on any device and confirm):
+1. On your **PC** (where you're already signed in to Claude Code), open a terminal and run:
+   ```
+   claude setup-token
+   ```
+2. A browser window opens; approve it with the Claude account that has your
+   subscription. The terminal then prints a token starting with `sk-ant-oat01-`.
+   It is valid for about a year.
+3. On the **server**, put it in `.env` (one line, no quotes, no spaces):
+   ```
+   CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
+   ```
+4. Apply it: `docker compose up -d` (containers pick up `.env` changes when recreated).
+
+Only the Claude Code process receives this token. Codex, the tool server and
+the code sandbox never see it (`arena/agents/cli.py` removes every
+secret-looking variable from the CLIs' environment).
+
+When it expires or you revoke it, the login check alerts you (see below);
+repeat steps 1 to 4.
+
+**Codex: device-code login (or copy your PC's login)**
+
+Option 1, device code (recommended):
+
+1. On the server:
+   ```bash
+   docker compose run --rm engine codex login --device-auth
+   ```
+2. It prints a URL and a short code. Open the URL on your phone or PC, sign
+   in with your ChatGPT account and enter the code.
+3. The terminal says you're logged in. The login is saved in the `codex-home`
+   volume, so it survives restarts and rebuilds.
+
+Option 2, copy the login from your PC: Codex keeps it in
+`%USERPROFILE%\.codex\auth.json` on Windows.
 
 ```bash
-docker compose build
-docker compose run --rm engine codex login --device-auth
+# on your PC (PowerShell): copy the file to the server
+scp $env:USERPROFILE\.codex\auth.json you@your-server:/tmp/codex-auth.json
+# on the server: put it into the volume, then delete the copy
+docker compose run --rm -v /tmp/codex-auth.json:/tmp/auth.json:ro engine \
+  sh -c 'cp /tmp/auth.json /home/arena/.codex/auth.json && chmod 600 /home/arena/.codex/auth.json'
+rm /tmp/codex-auth.json
 ```
 
-The login is kept in the `codex-home` volume. If Codex complains that its
-sandbox isn't supported inside Docker, add `CODEX_SANDBOX=danger-full-access`
-to `.env`: Codex's shell tool is switched off anyway, and the container is the
-sandbox.
+Treat `auth.json` like a password. A copied login shares its refresh token
+with the PC; if one machine refreshes it, the other can get signed out. If
+you also use Codex on the PC, prefer option 1 (a separate login).
 
-Check both:
+**Check both:**
 
 ```bash
 docker compose run --rm engine python -m arena.main check-agents --probe
 ```
+
+Both must say `OK` for "installed", "signed in" and "probe turn".
+
+**Automatic login checks.** The scheduler runs `check-logins` (the same
+probe) every day at 07:00 ET and again 2 hours before each decide (Saturday
+08:00). If either agent fails, you get a Telegram alert. If a login is
+broken at decide time itself, that agent's turn is **not** run and **not**
+counted as failed: you get an alert right away, and decide retries every 30
+minutes until Monday's open. Fix the login and the next retry completes the
+week. (If it's still broken at Monday's open, run
+`docker compose exec engine python -m arena.main decide` once it's fixed;
+the trades then happen at the next open.)
 
 ### 3. Load data, kick off, start
 

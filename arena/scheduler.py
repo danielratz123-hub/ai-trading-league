@@ -4,6 +4,7 @@
     daily     every trading day, 45 min after the close (16:45, or 13:45 on half days)
     decide    the morning after the week's last trading day (normally Saturday 10:00)
     calendar  Sundays at noon (refreshes holidays)
+    check-logins  every day at 07:00, and 2 hours before every decide (08:00)
 
     python -m arena.main scheduler
 
@@ -38,6 +39,9 @@ EXECUTE_AT = (9, 50)                 # Alpaca's free data plan lags 15 minutes
 DAILY_AFTER_CLOSE = timedelta(minutes=45)
 DECIDE_AT = (10, 0)                  # the morning after the week's last close
 CALENDAR_AT = (12, 0)                # Sundays
+LOGIN_CHECK_AT = (7, 0)              # daily
+PRE_DECIDE_CHECK = timedelta(hours=2)
+TEMPFAIL = 75                        # "retry until fixed" (a login problem at decide)
 CATCH_UP_DAYS = 4                    # don't replay days older than this after downtime
 MAX_ATTEMPTS = 3
 RETRY_AFTER = timedelta(minutes=30)
@@ -53,6 +57,8 @@ class Job:
 
     def argv(self, db_path: str | Path) -> list[str]:
         args = [sys.executable, "-m", "arena.main", self.name, "--db", str(db_path)]
+        if self.name == "check-logins":
+            args += ["--reason", self.key]
         return args + (["--date", self.date] if self.date else [])
 
 
@@ -86,7 +92,9 @@ def due_jobs(now: datetime, calendar: dict[str, str], history: dict[tuple[str, s
         runs = history.get((job, key), [])
         if any(r["exit_code"] == 0 for r in runs):
             return False
-        if len(runs) >= MAX_ATTEMPTS:
+        # Login problems (exit 75) don't use up attempts: decide keeps
+        # retrying every 30 minutes until its window closes.
+        if sum(1 for r in runs if r["exit_code"] != TEMPFAIL) >= MAX_ATTEMPTS:
             return False                       # give up; a human should look at it
         return not runs or now - runs[-1]["started_at"] >= RETRY_AFTER
 
@@ -124,8 +132,15 @@ def due_jobs(now: datetime, calendar: dict[str, str], history: dict[tuple[str, s
         nxt = next((d for d in days if d > week_end), None)
         start = _at((date.fromisoformat(week_end) + timedelta(days=1)).isoformat(), DECIDE_AT)
         end = _at(nxt, (9, 30)) if nxt else start + timedelta(days=3)
+        if start - PRE_DECIDE_CHECK <= now < start:
+            add("check-logins", None, f"pre-decide-{week_end}")
         if start <= now < end:
             add("decide", week_end)
+
+    # Login health check, daily. Last in the list so it never delays
+    # execute or daily (a probe turn can take a few minutes).
+    if now >= _at(today, LOGIN_CHECK_AT):
+        add("check-logins", None, f"daily-{today}")
     return jobs
 
 

@@ -9,6 +9,8 @@ Setup
     update-prices    download or update adjusted daily bars
     check-agents     check that Claude Code and Codex are installed and signed in
                      (add --probe to run a tiny test turn through each)
+    check-logins     the scheduler's login health check: a tiny probe turn per agent,
+                     Telegram alert if one fails (exit 1)
 League (times are US Eastern)
     kickoff          create both agents with starting cash and run week 1's decisions
     decide           weekend: update prices, run both agents' turns, store pending orders
@@ -50,7 +52,7 @@ from pathlib import Path
 from . import league, ledger, prices, scoring, trading_calendar
 from .agents.cli import CLI_ADAPTERS
 from .config import SETTINGS, MissingKeyError
-from .db import connect, dry_run_guard
+from .db import connect, dry_run_guard, log_event, transaction
 from .league import LeagueError
 from .prices import ET
 from .universe import ALL_TICKERS
@@ -285,6 +287,39 @@ def cmd_check_agents(conn, args) -> None:
             print(("  OK  " if res["ok"] else "  FAIL") + f" probe turn: {res['summary']}")
 
 
+def cmd_check_logins(conn, args) -> None:
+    """Login health check (daily, and 2 hours before every decide). Runs the
+    same probe turn as `check-agents --probe` for each agent and alerts if
+    one can't do a real turn. Uses a little plan usage."""
+    from . import alerts
+    from .agents import cli
+
+    problems = {}
+    for agent_id, cls in CLI_ADAPTERS.items():
+        agent = cls(agent_id, SETTINGS.models[agent_id])
+        ok, text = agent.check_install()
+        if ok:
+            ok, text = agent.check_login()
+        if ok:
+            try:
+                res = cli.probe(agent)
+                ok, text = res["ok"], res["summary"]
+            except Exception as e:  # noqa: BLE001 - report, don't crash
+                ok, text = False, f"probe crashed: {type(e).__name__}: {e}"
+        print(("OK   " if ok else "FAIL ") + f"{agent_id}: {text[:300]}")
+        if not ok:
+            problems[agent_id] = text[:300]
+            with transaction(conn):
+                log_event(conn, "error", f"login:{agent_id}", f"login check failed: {text[:300]}")
+    if problems:
+        why = f" ({args.reason})" if getattr(args, "reason", None) else ""
+        alerts.send("LOGIN CHECK FAILED" + why + ":\n"
+                    + "\n".join(f"- {a}: {t}" for a, t in problems.items())
+                    + "\nFix it before the next decide (DEPLOY.md, 'Sign the agents in').",
+                    level="error", key="login-check-" + ",".join(sorted(problems)))
+        sys.exit(1)
+
+
 def cmd_pause(conn, args) -> None:
     league.set_paused(conn, True)
     print("League paused: decide and execute will refuse to run. (daily keeps running so open "
@@ -401,6 +436,7 @@ COMMANDS = {
     "update-calendar": cmd_update_calendar,
     "update-prices": cmd_update_prices,
     "check-agents": cmd_check_agents,
+    "check-logins": cmd_check_logins,
     "kickoff": cmd_kickoff,
     "decide": cmd_decide,
     "execute": cmd_execute,
@@ -455,9 +491,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--no-browser", action="store_true", help="app: don't open the browser")
     parser.add_argument("--host", default="127.0.0.1", help="serve: address to listen on")
     parser.add_argument("--port", type=int, default=8000, help="serve: port")
+    parser.add_argument("--reason", help="check-logins: shown in the alert (e.g. 'before decide')")
     parser.add_argument("--scheduler", action="store_true", help="health: also check the scheduler heartbeat")
     parser.add_argument("--db", default=str(SETTINGS.db_path), help="database path")
     args = parser.parse_args(argv)
+    import os
+    os.environ.setdefault("ARENA_DB", str(Path(args.db).resolve()))   # where alerts keep their state
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
 
     if args.command == "health":
@@ -482,6 +521,11 @@ def main(argv: list[str] | None = None) -> None:
             print("(dry run: worked on a throwaway copy; your database was not changed)")
     except MissingKeyError as e:
         sys.exit(f"Configuration error: {e}")
+    except league.LoginProblem as e:
+        # Exit code 75 (EX_TEMPFAIL) tells the scheduler "retry until fixed";
+        # it doesn't count towards the normal 3-attempt limit.
+        print(f"Can't finish {args.command}: login problem: {e}", file=sys.stderr)
+        sys.exit(75)
     except LeagueError as e:
         sys.exit(f"Can't run {args.command}: {e}")
     finally:
