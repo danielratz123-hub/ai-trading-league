@@ -62,3 +62,11 @@ def _no_real_alerts(monkeypatch, tmp_path_factory):
     monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
     state = tmp_path_factory.mktemp("alerts") / "alerts-state.json"
     monkeypatch.setattr(alerts, "_state_file", lambda: state)
+
+
+@pytest.fixture(autouse=True)
+def _not_the_server(monkeypatch):
+    """Tests describe the app on its own: never inherit a real server's
+    settings (login, admin token, Codex sandbox mode) from the environment."""
+    for k in ("ARENA_SERVER", "DASHBOARD_PASSWORD_HASH", "ADMIN_TOKEN", "ARENA_DISABLE_CONTROL"):
+        monkeypatch.delenv(k, raising=False)
