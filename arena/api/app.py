@@ -168,7 +168,7 @@ def create_app() -> FastAPI:
     if control.control_enabled():
         app.include_router(control.router)
 
-    # The dashboard (also deployable on its own, e.g. on Vercel).
+    # The dashboard itself (always served here, behind the login; separate hosting is not supported).
     if WEB_DIR.exists():
         app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
     return app

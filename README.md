@@ -111,10 +111,11 @@ python -m arena.main serve --db data\demo.db   # look at the dashboard with demo
 
 ## Phase 5: running it for real
 
-See **[DEPLOY.md](DEPLOY.md)**: the scheduler (`python -m arena.main scheduler`) runs
-`decide` / `execute` / `daily` on US market time, either on this PC or on a VPS with
-Docker (`docker compose up -d`). It also covers the dashboard on Vercel and the optional
-Alpaca paper-account mirror (`MIRROR_PAPER=1`).
+See **[DEPLOY.md](DEPLOY.md)**: everything runs 24/7 on one Linux VPS with Docker
+(`docker compose up -d`): the scheduler, both agents, the dashboard behind a login with
+HTTPS on your own domain, daily backups and Telegram alerts. Moving a running league from
+this PC: **[MIGRATION.md](MIGRATION.md)**. (Hosting the dashboard separately on Vercel is
+no longer supported.) Running on this PC with `start.cmd` still works for testing.
 
 ## Layout
 

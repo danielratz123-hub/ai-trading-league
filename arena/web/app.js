@@ -3,7 +3,8 @@
 // untrusted text: it only ever reaches the page through esc() / textContent.
 "use strict";
 
-const API = (new URLSearchParams(location.search).get("api") || window.ARENA_API || "").replace(/\/$/, "");
+// Same origin only: the dashboard is always served by the app itself, behind the login.
+const API = "";
 const state = { status: null, chartMode: "equity", tab: null, charts: {} };
 
 // ------------------------------------------------------------------ helpers
