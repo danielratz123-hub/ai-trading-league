@@ -43,7 +43,8 @@ def test_normal_analysis_works(data):
     ("[c for c in ().__class__.__base__.__subclasses__() if c.__name__ == 'Popen'][0](['echo'])",
      "'subprocess.Popen' is not allowed"),
     ("prices.to_csv('out.csv')", "file access is not allowed"),
-    ("import pandas as pd\npd.io.common.os.spawnv(0, 'python', ['python'])", "'os.spawn' is not allowed"),
+    # Blocked as os.spawn on Windows, as os.fork on Linux (spawnv forks there).
+    ("import pandas as pd\npd.io.common.os.spawnv(0, 'python', ['python'])", "sandbox: operation 'os."),
 ])
 def test_escapes_are_blocked(data, code, expected):
     r = run(code, data)
