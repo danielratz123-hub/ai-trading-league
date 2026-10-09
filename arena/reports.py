@@ -430,6 +430,12 @@ def run_report_turn(conn, agent, week_no: int, simulate: bool = False) -> dict:
                   f"week {week_no}: report {'accepted' if accepted else 'failed'}{' - ' + error if error else ''}")
     if not accepted and not simulate:
         alerts.send(f"Strategy report FAILED ({agent_id}, week {week_no}): {error}", level="warning")
+    if not simulate:
+        try:
+            from .league import check_daily_cost
+            check_daily_cost(conn, agent_id)
+        except Exception:  # noqa: BLE001
+            pass
     return {"week": week_no, "agent": agent_id, "status": "accepted" if accepted else "failed", "error": error}
 
 

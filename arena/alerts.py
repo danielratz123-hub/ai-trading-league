@@ -32,6 +32,18 @@ ICONS = {"info": "ℹ️", "good": "✅", "warning": "⚠️", "error": "🚨"}
 _sender = None
 
 
+def api_source(text: str | None) -> str | None:
+    """Which outside service an error came from, for the alert's headline."""
+    t = (text or "").lower()
+    if "alpaca" in t or "data.alpaca.markets" in t or "paper-api" in t:
+        return "Alpaca"
+    if "anthropic" in t or "claude" in t and ("api error" in t or "overloaded" in t or "rate limit" in t):
+        return "Anthropic (Claude)"
+    if "openai" in t or "codex error" in t or "chatgpt" in t:
+        return "OpenAI (ChatGPT)"
+    return None
+
+
 def configured() -> bool:
     return bool(os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID"))
 

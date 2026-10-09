@@ -116,6 +116,11 @@ class Settings:
     report_max_tool_calls: int = int(os.getenv("REPORT_MAX_TOOL_CALLS", "8"))
     reports_in_briefing: int = 4
 
+    # Alert (never pause) when an agent's ESTIMATED AI cost for one day goes
+    # above this. On subscriptions nothing is billed per token; the estimate
+    # prices the tokens at API rates, as a usage gauge.
+    daily_ai_cost_alert_usd: float = float(os.getenv("DAILY_AI_COST_ALERT_USD", "20"))
+
 
 SETTINGS = Settings()
 

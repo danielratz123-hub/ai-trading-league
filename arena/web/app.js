@@ -386,6 +386,7 @@ function renderTimeline(el, weeks) {
     <article class="week">
       <div class="week-head"><h2>Week ${w.week}${w.simulated ? " (simulated)" : ""}</h2>
         <span class="muted small">decided ${esc(w.decision_date)} · traded ${esc(w.exec_date)} · ${esc(w.status)}
+        ${w.spy_return != null ? ` · SPY benchmark <span class="${signClass(w.spy_return)}">${pct(w.spy_return)}</span>` : ""}
         ${w.bonus_winner ? ` · <span class="badge badge-good">$ bonus to ${esc(label(w.bonus_winner))}</span>` : ""}</span></div>
       <div class="grid-2">${ids.map(id => sideHtml(id, w.agents[id])).join("")}</div>
     </article>`).join("")}</div>`;
@@ -488,7 +489,20 @@ function renderResearch(el, research, costs) {
         <td class="num">${money(c.est_ai_cost_usd || 0)}</td>
         <td class="num">${money((c.commissions || 0) + (c.slippage || 0) + (c.borrow_fees || 0))}</td></tr>`;
     }).join("")).join("") || `<tr><td colspan="8" class="muted">No usage yet</td></tr>`;
+  const dLim = costs.daily_alert_usd;
+  const dRows = (costs.daily || []).map(d => `<tr><td>${esc(d.day)}</td>${ids.map(id => {
+      const c = d.agents[id];
+      if (!c) return `<td class="num muted">–</td><td class="num muted">–</td>`;
+      const over = dLim != null && c.est_ai_cost_usd > dLim;
+      return `<td class="num">${c.turns} · ${(c.tokens || 0).toLocaleString()}</td>
+              <td class="num ${over ? "neg" : ""}">${money(c.est_ai_cost_usd)}${over ? " ▲" : ""}</td>`;
+    }).join("")}</tr>`).join("") || `<tr><td colspan="${1 + ids.length * 2}" class="muted">No turns in the last 30 days</td></tr>`;
   el.innerHTML = `<div class="tab-panel">
+    <section class="panel"><h2>AI usage per day (last 30 days, UTC)</h2>
+      <div class="scroll"><table><tr><th rowspan="2">Day</th>${ids.map(id => `<th colspan="2">${esc(label(id))}</th>`).join("")}</tr>
+        <tr>${ids.map(() => `<th class="num">Turns · tokens</th><th class="num">Est. cost</th>`).join("")}</tr>${dRows}</table></div>
+      <p class="muted small">Alert above ${money(dLim ?? 0)} per agent per day (▲). An alert only: agents are never paused.
+        On subscriptions nothing is billed per token; the estimate prices the tokens at API rates.</p></section>
     <section class="panel"><h2>Web searches per weekly turn</h2>
       <p class="muted small">Soft limit ${lim ?? "–"} per turn, the same for both (written into each briefing, not enforced).
         ▲ = above the limit.</p>

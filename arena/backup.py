@@ -31,7 +31,8 @@ from pathlib import Path
 from .prices import ET
 
 LOCAL_KEEP = 7
-_NAME = re.compile(r"arena-(\d{4}-\d{2}(?:-\d{2})?)\.db\.gz$")
+_NAME = re.compile(r"(?:arena|config)-(\d{4}-\d{2}(?:-\d{2})?)\.(?:db\.gz|json)$")
+_DB = re.compile(r"arena-(\d{4}-\d{2}(?:-\d{2})?)\.db\.gz$")
 
 
 class BackupError(RuntimeError):
@@ -82,9 +83,38 @@ def decompress(src: str | Path, dest: str | Path) -> None:
 # --------------------------------------------------------------------------
 
 def to_delete(names: list[str], keep: int) -> list[str]:
-    """The names beyond the newest `keep` (names sort by date)."""
-    dated = sorted((n for n in names if _NAME.search(n)), key=lambda n: _NAME.search(n).group(1))
-    return dated[:-keep] if keep > 0 and len(dated) > keep else ([] if keep > 0 else dated)
+    """The names beyond the newest `keep` of each kind (database backups and
+    config files are counted separately; names sort by date)."""
+    out = []
+    for kind in ("arena-", "config-"):
+        dated = sorted((n for n in names if _NAME.search(n) and n.rsplit("/", 1)[-1].startswith(kind)),
+                       key=lambda n: _NAME.search(n).group(1))
+        out += dated[:-keep] if keep > 0 and len(dated) > keep else ([] if keep > 0 else dated)
+    return out
+
+
+# Settings worth restoring with the database. Secrets are never included:
+# anything whose name looks like one is left out by name AND by pattern.
+CONFIG_KEYS = ("AGENT_BACKEND", "CLAUDE_MODEL", "GPT_MODEL", "REASONING_EFFORT", "ALPACA_DATA_FEED",
+               "MIRROR_MODE", "WEB_SEARCH_SOFT_LIMIT", "REPORTS", "REPORT_TIMEOUT_SEC", "REPORT_MAX_TOOL_CALLS",
+               "DAILY_AI_COST_ALERT_USD", "CODEX_SANDBOX", "DOMAIN", "APP_UID", "BACKUP_KEEP_DAILY",
+               "BACKUP_KEEP_MONTHLY", "BACKUP_RCLONE_REMOTE", "BACKUP_S3_ENDPOINT", "BACKUP_S3_BUCKET",
+               "BACKUP_S3_PREFIX", "GPT_PRICE_IN", "GPT_PRICE_CACHED_IN", "GPT_PRICE_OUT", "MAX_API_SPEND_USD")
+_SECRETISH = re.compile(r"(KEY|SECRET|TOKEN|PASSWORD|PASSWD|HASH|CREDENTIAL)", re.I)
+
+
+def config_snapshot() -> dict:
+    """The league's non-secret settings and versions, for the backup."""
+    import subprocess
+    vals = {k: os.environ[k] for k in CONFIG_KEYS if k in os.environ and not _SECRETISH.search(k)}
+    versions = {}
+    for name, cmd in (("claude", ["claude", "--version"]), ("codex", ["codex", "--version"])):
+        try:
+            versions[name] = subprocess.run(cmd, capture_output=True, text=True, timeout=30).stdout.strip()
+        except Exception:  # noqa: BLE001
+            versions[name] = None
+    return {"settings": vals, "cli_versions": versions,
+            "note": "Secrets (API keys, tokens, password hash) are deliberately not included."}
 
 
 # --------------------------------------------------------------------------
@@ -134,6 +164,41 @@ class S3Storage(Storage):
         self.s3.delete_object(Bucket=self.bucket, Key=key)
 
 
+class RcloneStorage(Storage):
+    """Any rclone remote, e.g. Google Drive ("gdrive:ai-trading-league").
+    The rclone config (with its Google sign-in) lives in the rclone-config
+    volume; see DEPLOY.md "Backups"."""
+
+    def __init__(self, remote: str):
+        self.remote = remote.rstrip("/")
+
+    def _run(self, *args: str) -> str:
+        import subprocess
+        p = subprocess.run(["rclone", *args], capture_output=True, text=True, timeout=600)
+        if p.returncode != 0:
+            raise BackupError(f"rclone {args[0]} failed: {p.stderr.strip()[-400:]}")
+        return p.stdout
+
+    def put(self, local, key):
+        self._run("copyto", str(local), f"{self.remote}/{key}")
+
+    def get(self, key, local):
+        self._run("copyto", f"{self.remote}/{key}", str(local))
+
+    def list(self, prefix):
+        folder = prefix.rsplit("/", 1)[0] if "/" in prefix else ""
+        try:
+            names = self._run("lsf", "--files-only", f"{self.remote}/{folder}").split()
+        except BackupError as e:
+            if "directory not found" in str(e).lower():
+                return []
+            raise
+        return sorted(f"{folder}/{n}" if folder else n for n in names if f"{folder}/{n}".startswith(prefix))
+
+    def delete(self, key):
+        self._run("deletefile", f"{self.remote}/{key}")
+
+
 class DirStorage(Storage):
     """A folder that behaves like a bucket (tests, or a mounted disk)."""
 
@@ -160,6 +225,7 @@ class DirStorage(Storage):
 
 def settings() -> dict:
     return {
+        "rclone": os.getenv("BACKUP_RCLONE_REMOTE", "").strip(),
         "bucket": os.getenv("BACKUP_S3_BUCKET", "").strip(),
         "endpoint": os.getenv("BACKUP_S3_ENDPOINT", "").strip(),
         "region": os.getenv("BACKUP_S3_REGION", "").strip(),
@@ -173,6 +239,8 @@ def settings() -> dict:
 
 def remote_storage() -> Storage | None:
     s = settings()
+    if s["rclone"]:
+        return RcloneStorage(s["rclone"])
     if not s["bucket"]:
         return None
     if not (s["key_id"] and s["secret"]):
@@ -213,20 +281,28 @@ def run_backup(db_path: str | Path, storage: Storage | None = None, prefix: str 
     for old in to_delete([p.name for p in local_dir.glob("arena-*.db.gz")], LOCAL_KEEP):
         (local_dir / old).unlink(missing_ok=True)
 
+    import json
+    config = local_dir / f"config-{day}.json"
+    config.write_text(json.dumps(config_snapshot(), indent=2), encoding="utf-8")
+    for old in to_delete([p.name for p in local_dir.glob("config-*.json")], LOCAL_KEEP):
+        (local_dir / old).unlink(missing_ok=True)
+
     uploaded: list[str] = []
     deleted: list[str] = []
     if storage is not None:
         daily_key = f"{prefix}daily/arena-{day}.db.gz"
         storage.put(local, daily_key)
         uploaded.append(daily_key)
-        monthly = storage.list(f"{prefix}monthly/")
+        storage.put(config, f"{prefix}daily/config-{day}.json")
+        uploaded.append(f"{prefix}daily/config-{day}.json")
+        monthly = storage.list(f"{prefix}monthly/") if keep_monthly > 0 else []
         monthly_key = f"{prefix}monthly/arena-{month}.db.gz"
-        if monthly_key not in monthly:
+        if keep_monthly > 0 and monthly_key not in monthly:
             storage.put(local, monthly_key)          # first backup of the month
             uploaded.append(monthly_key)
             monthly.append(monthly_key)
         for kind, names, keep in (("daily", storage.list(f"{prefix}daily/"), keep_daily),
-                                  ("monthly", monthly, keep_monthly)):
+                                  ("monthly", monthly, keep_monthly if keep_monthly > 0 else 10**9)):
             for key in to_delete(names, keep):
                 storage.delete(key)
                 deleted.append(key)
@@ -248,9 +324,9 @@ def fetch_backup(name: str, dest: str | Path, db_path: str | Path, storage: Stor
     prefix = settings()["prefix"] if prefix is None else prefix
     local_dir = Path(db_path).resolve().parent / "backups"
     if name == "latest":
-        daily = storage.list(f"{prefix}daily/") if storage is not None else []
+        daily = [n for n in (storage.list(f"{prefix}daily/") if storage is not None else []) if _DB.search(n)]
         if daily:
-            name = sorted(daily, key=lambda n: _NAME.search(n).group(1) if _NAME.search(n) else "")[-1]
+            name = sorted(daily, key=lambda n: _DB.search(n).group(1))[-1]
         else:
             loc = sorted(p.name for p in local_dir.glob("arena-*.db.gz"))
             if not loc:

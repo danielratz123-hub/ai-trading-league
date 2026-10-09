@@ -192,6 +192,11 @@ def decide(conn: sqlite3.Connection, decision_date: str | None = None, simulate:
             reports.append(report)
         else:
             reports.append(_run_agent_turn(conn, adapter, week_no, decision_date, exec_date, simulate))
+        if not simulate:
+            try:
+                check_daily_cost(conn, agent_id)
+            except Exception:  # noqa: BLE001 - a usage gauge must never stop decide
+                pass
 
     if login_problems:
         # Leave the week 'deciding'. Agents that finished keep their result;
@@ -213,8 +218,9 @@ def _alert_turn(agent_id: str, week_no: int, accepted: bool, error: str | None, 
         alerts.send(f"SECURITY: {where}: the CLI ran {shell} shell command(s) / file change(s) despite the "
                     f"lockdown.", level="error")
     if not accepted:
-        alerts.send(f"Agent turn FAILED ({where}): {(error or '')[:500]}\nIts portfolio stays as it is this week.",
-                    level="error")
+        source = alerts.api_source(error)
+        alerts.send(f"Agent turn FAILED ({where}){' - ' + source + ' API error' if source else ''}: "
+                    f"{(error or '')[:500]}\nIts portfolio stays as it is this week.", level="error")
         return
     if rejected:
         alerts.send(f"Decision rejected {rejected} time(s) before being accepted ({where}). "
@@ -222,6 +228,21 @@ def _alert_turn(agent_id: str, week_no: int, accepted: bool, error: str | None, 
     if nudged:
         alerts.send(f"Agent turn needed a nudge ({where}): it stopped without submitting and was "
                     f"resumed once. Accepted in the end.", level="warning")
+
+
+def check_daily_cost(conn, agent_id: str) -> float:
+    """Estimated AI cost of the agent's turns today (UTC); alert above the
+    limit. Only an alert: the league never pauses an agent for this."""
+    from .api.queries import daily_costs
+    today = datetime.now(timezone.utc).date().isoformat()
+    row = next((d for d in daily_costs(conn, days=1) if d["day"] == today), None)
+    cost = (row or {}).get("agents", {}).get(agent_id, {}).get("est_ai_cost_usd", 0.0) or 0.0
+    if cost > SETTINGS.daily_ai_cost_alert_usd:
+        alerts.send(f"Usage alert: {agent_id}'s estimated AI cost today is ${cost:.2f} "
+                    f"(limit ${SETTINGS.daily_ai_cost_alert_usd:.2f}). It runs on your subscription, so this "
+                    f"isn't billed per token, but it means unusually heavy use. The agent is NOT paused.",
+                    level="warning", key=f"cost-{agent_id}-{today}", every=timedelta(hours=24))
+    return cost
 
 
 def _login_problem(conn, problems: dict[str, str], agent_id: str, week_no: int, msg: str) -> None:

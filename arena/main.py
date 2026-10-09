@@ -37,6 +37,8 @@ League (times are US Eastern)
     backups          list the backups (local and remote)
     restore-backup   NAME|latest --to PATH: download, check and unpack a backup (used by scripts/restore.sh)
     test-alert       send a test Telegram alert
+    reconcile        compare the Alpaca paper account with the league's records (alert on mismatch)
+    heartbeat        send the daily "still alive" message
     mirror           show (or with --apply, place) the paper-account orders that copy the leader
 Tools
     tool             try a research tool by hand, e.g.
@@ -54,7 +56,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import league, ledger, prices, scoring, trading_calendar
@@ -385,7 +387,10 @@ def _execute_summary(conn, d, rep, args) -> None:
             best = max(w.weekly_returns.values())
             winners = [a for a, r in w.weekly_returns.items() if r == best]
             returns = ", ".join(f"{a} {r:+.2%}" for a, r in w.weekly_returns.items())
-            lines.append(f"Week {w.scored_week} scored: {returns}. "
+            from .api.queries import spy_week_return
+            spy = spy_week_return(conn, w.scored_week)
+            lines.append(f"Week {w.scored_week} scored: {returns}"
+                         + (f", SPY {spy:+.2%}" if spy is not None else "") + ". "
                          + (f"Winner: {winners[0]}." if len(winners) == 1 else "A tie."))
         if w is not None and w.bonus_winner:
             lines.append(f"Bonus ${SETTINGS.bonus_amount:,.0f} deposited to {w.bonus_winner}.")
@@ -546,6 +551,59 @@ def cmd_restore_backup(conn, args) -> None:
     print(f"Restored {name} to {args.to} (integrity check passed)")
 
 
+def cmd_reconcile(conn, args) -> None:
+    from . import alerts, mirror
+    try:
+        res = mirror.reconcile(conn)
+    except Exception as e:  # noqa: BLE001 - report clearly; the scheduler retries
+        alerts.send(f"Alpaca API error: reconciliation could not read the paper account: "
+                    f"{type(e).__name__}: {str(e)[:300]}", level="error", key="reconcile-error")
+        sys.exit(f"Reconciliation failed: {type(e).__name__}: {e}")
+    if not res["checked"]:
+        print(res["note"])
+        return
+    with transaction(conn):
+        log_event(conn, "error" if res["mismatches"] else "info", "reconcile",
+                  f"{res['tickers']} tickers checked, {len(res['mismatches'])} mismatch(es)"
+                  + (": " + json.dumps(res["mismatches"])[:1500] if res["mismatches"] else ""))
+    if not res["mismatches"]:
+        print(f"Paper account matches the league's records ({res['tickers']} tickers).")
+        return
+    lines = [f"{m['ticker']}: Alpaca {m['alpaca']:g}, expected {m['expected']:g} (diff {m['diff']:+g})"
+             for m in res["mismatches"]]
+    print("MISMATCH:\n" + "\n".join(lines))
+    alerts.send("Reconciliation MISMATCH: the Alpaca paper account doesn't match the league's records.\n"
+                + "\n".join(lines[:15]) + "\nThe league's own scores are unaffected (they come from its ledger).",
+                level="error", key="reconcile-mismatch", every=timedelta(hours=20))
+
+
+def cmd_heartbeat(conn, args) -> None:
+    """Daily "still alive" message: if it doesn't arrive, something is wrong."""
+    from . import alerts, health
+    now = datetime.now(ET)
+    since = (now - timedelta(days=1)).isoformat()
+    runs = conn.execute("SELECT job, exit_code FROM job_runs WHERE started_at >= ?", (since,)).fetchall()
+    ok = sum(1 for r in runs if r[1] == 0)
+    failed = sorted({r[0] for r in runs if r[1] not in (0, None)})
+    lines = [f"Still alive: {now:%a %Y-%m-%d %H:%M} ET.",
+             f"Last 24 h: {ok} job(s) OK" + (f", failures in: {', '.join(failed)}" if failed else ", no failures") + "."]
+    d = prices.latest_price_date(conn)
+    if d and ledger.agent_ids(conn):
+        for a in ledger.agent_ids(conn):
+            lines.append(f"{a}: equity ${ledger.value_agent(conn, a, d, 'close').equity:,.2f} ({d} close)")
+    week = conn.execute("SELECT week_no, status FROM weeks ORDER BY week_no DESC LIMIT 1").fetchone()
+    if week:
+        lines.append(f"Week {week[0]}: {week[1]}.")
+    h = health.check(args.db, scheduler=True)
+    lines.append(f"Disk free {h['disk_free_gb']} GB" + ("" if h["ok"] else f"; problems: {'; '.join(h['problems'])}"))
+    last = conn.execute("SELECT key, exit_code FROM job_runs WHERE job='backup' ORDER BY id DESC LIMIT 1").fetchone()
+    if last:
+        lines.append(f"Last backup: {last[0].removeprefix('backup-')} ({'ok' if last[1] == 0 else 'FAILED'}).")
+    sent = alerts.send("\n".join(lines), level="good" if h["ok"] and not failed else "warning")
+    print("\n".join(lines))
+    print("(sent to Telegram)" if sent else "(Telegram not configured: logged only)")
+
+
 def cmd_test_alert(conn, args) -> None:
     from . import alerts
     if not alerts.configured():
@@ -602,7 +660,9 @@ COMMANDS = {
     "reports": cmd_reports,
     "backups": cmd_backups,
     "restore-backup": None,  # handled in main() before the database is opened
-    "test-alert": cmd_test_alert,          # handled in main() before the database is opened
+    "test-alert": cmd_test_alert,
+    "reconcile": cmd_reconcile,
+    "heartbeat": cmd_heartbeat,          # handled in main() before the database is opened
 }
 READ_ONLY = {"status", "tool", "check-agents", "init-db", "serve", "scheduler", "app", "hash-password",
              "backup", "backups", "restore-backup", "test-alert", "check-logins", "health"}

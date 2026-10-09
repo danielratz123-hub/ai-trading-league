@@ -12,11 +12,12 @@ COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
 # tzdata: market times in US/Eastern. util-linux: `unshare` (the sandbox's
 # no-network layer, when the kernel allows it). bubblewrap: Codex's Linux
 # sandbox. sqlite3: lets restore.sh check a backup before using it.
+# rclone: backups to Google Drive (or any rclone remote).
 ARG CLAUDE_CODE_VERSION=2.1.293
 ARG CODEX_VERSION=0.161.0
 RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && apt-get update \
- && apt-get install -y --no-install-recommends tzdata util-linux ca-certificates bubblewrap sqlite3 \
+ && apt-get install -y --no-install-recommends tzdata util-linux ca-certificates bubblewrap sqlite3 rclone \
  && rm -rf /var/lib/apt/lists/* \
  && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "@openai/codex@${CODEX_VERSION}" \
  && npm cache clean --force
@@ -36,7 +37,7 @@ COPY scripts ./scripts
 # inside the claude-home volume.
 ARG APP_UID=1000
 RUN useradd --create-home --uid ${APP_UID} arena \
- && mkdir -p /app/data /home/arena/.claude /home/arena/.codex \
+ && mkdir -p /app/data /home/arena/.claude /home/arena/.codex /home/arena/.config/rclone \
  && chown -R arena:arena /app/data /home/arena
 USER arena
 ENV PYTHONUNBUFFERED=1 \

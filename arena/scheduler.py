@@ -6,6 +6,8 @@
     calendar  Sundays at noon (refreshes holidays)
     check-logins  every day at 07:00, and 2 hours before every decide (08:00)
     backup    every day at 17:30 (after daily)
+    reconcile trading days at 17:00: Alpaca paper account vs the league's records
+    heartbeat every day at 18:00: a "still alive" Telegram message
     reports   trading days from 10:15, once execute has succeeded (weekly strategy reports)
 
     python -m arena.main scheduler
@@ -44,6 +46,8 @@ CALENDAR_AT = (12, 0)                # Sundays
 LOGIN_CHECK_AT = (7, 0)              # daily
 BACKUP_AT = (17, 30)                 # daily, after the daily job (16:45)
 REPORTS_AT = (10, 15)                # after execute (09:50) has scored the week
+RECONCILE_AT = (17, 0)               # trading days, after the close
+HEARTBEAT_AT = (18, 0)               # daily "still alive" message
 DISK_CHECK_EVERY = timedelta(hours=1)
 PRE_DECIDE_CHECK = timedelta(hours=2)
 TEMPFAIL = 75                        # "retry until fixed" (a login problem at decide)
@@ -51,7 +55,7 @@ CATCH_UP_DAYS = 4                    # don't replay days older than this after d
 MAX_ATTEMPTS = 3
 RETRY_AFTER = timedelta(minutes=30)
 TIMEOUTS = {"decide": 3 * 3600, "execute": 1800, "daily": 3600, "update-calendar": 600,
-            "backup": 1800, "check-logins": 1200, "reports": 3600}
+            "backup": 1800, "check-logins": 1200, "reports": 3600, "reconcile": 600, "heartbeat": 300}
 
 
 
@@ -148,8 +152,15 @@ def due_jobs(now: datetime, calendar: dict[str, str], history: dict[tuple[str, s
     if today in calendar and executed and now >= _at(today, REPORTS_AT):
         add("reports", None, f"reports-{today}")
 
+    if today in calendar and now >= _at(today, RECONCILE_AT):
+        add("reconcile", None, f"reconcile-{today}")
+
     if now >= _at(today, BACKUP_AT):
         add("backup", None, f"backup-{today}")
+
+    # "Still alive": if this message doesn't arrive, something is wrong.
+    if now >= _at(today, HEARTBEAT_AT):
+        add("heartbeat", None, f"heartbeat-{today}")
 
     # Login health check, daily. Last in the list so it never delays
     # execute or daily (a probe turn can take a few minutes).
@@ -225,10 +236,12 @@ def _alert_job(conn, job: Job, code: int, output: str) -> None:
             return       # login problem: league.decide already alerted (throttled)
         hard = sum(1 for c in earlier + [code] if c != TEMPFAIL)
         tail = "\n".join(output.strip().splitlines()[-6:])[-800:]
+        source = alerts.api_source(output)
         nxt = (f"Will retry in {int(RETRY_AFTER.total_seconds() // 60)} minutes (attempt {hard}/{MAX_ATTEMPTS})."
                if hard < MAX_ATTEMPTS else
                f"Gave up after {MAX_ATTEMPTS} attempts: please look at it (data/logs, docker compose logs engine).")
-        alerts.send(f"Job {job.name} ({job.key}) FAILED with exit code {code}. {nxt}\n{tail}", level="error")
+        head = f"{source} API error: job" if source else "Job"
+        alerts.send(f"{head} {job.name} ({job.key}) FAILED with exit code {code}. {nxt}\n{tail}", level="error")
     except Exception:  # noqa: BLE001 - alerts must never break the scheduler
         log.exception("could not send the job alert")
 

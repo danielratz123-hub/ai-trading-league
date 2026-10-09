@@ -78,6 +78,7 @@ services:
       - arena-data:/app/data
       - claude-home:/home/arena/.claude
       - codex-home:/home/arena/.codex
+      - rclone-config:/home/arena/.config/rclone   # Google Drive sign-in for backups
     # docker stop sends SIGTERM; the scheduler finishes its current job
     # first. Agent turns can take long; they re-run safely after a kill.
     stop_grace_period: 2m
@@ -102,6 +103,7 @@ services:
       - arena-data:/app/data
       - claude-home:/home/arena/.claude
       - codex-home:/home/arena/.codex
+      - rclone-config:/home/arena/.config/rclone
       - ./.env:/app/.env               # so the setup page can save settings (then: docker compose up -d)
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=10)"]
@@ -114,6 +116,7 @@ networks:
   web:
 
 volumes:
+  rclone-config:
   arena-data:
   claude-home:
   codex-home:

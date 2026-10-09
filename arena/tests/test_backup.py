@@ -66,7 +66,7 @@ def test_daily_monthly_upload_and_pruning(live, tmp_path):
     start = datetime(2026, 1, 1, 17, 30, tzinfo=ET)
     for i in range(45):                                  # 45 days of backups
         run_backup(path, store, prefix="p/", keep_daily=30, keep_monthly=12, now=start + timedelta(days=i))
-    daily = store.list("p/daily/")
+    daily = [n for n in store.list("p/daily/") if n.endswith(".db.gz")]     # config-*.json sit next to them
     monthly = store.list("p/monthly/")
     assert len(daily) == 30 and daily[-1].endswith("2026-02-14.db.gz")
     assert monthly == ["p/monthly/arena-2026-01.db.gz", "p/monthly/arena-2026-02.db.gz"]

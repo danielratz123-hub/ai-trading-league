@@ -347,3 +347,43 @@ def sync_combined(conn: sqlite3.Connection, d: str, broker: Broker | None = None
                      (d, "combined", equity, sum(len(v) for v in ids.values())))
         log_event(conn, "info", "mirror", f"{d}: combined account synced; {sum(len(v) for v in ids.values())} order(s)")
     return lines
+
+
+# --------------------------------------------------------------------------
+# Daily reconciliation (scheduler job "reconcile")
+# --------------------------------------------------------------------------
+
+def compare_positions(actual: dict[str, float], expected: dict[str, float]) -> list[dict]:
+    """Differences between the paper account and the league's records.
+
+    A short can only be held in whole shares, so for a short the account may
+    hold the recorded quantity rounded towards zero (e.g. -124 for -124.38).
+    Anything else above a tiny tolerance is a mismatch."""
+    out = []
+    for t in sorted(set(actual) | set(expected)):
+        a, e = actual.get(t, 0.0), expected.get(t, 0.0)
+        if abs(a - e) < 1e-4:
+            continue
+        if e < 0 and abs(a - int(e)) < 1e-6:
+            continue                       # whole-share rounding of a short
+        out.append({"ticker": t, "alpaca": a, "expected": round(e, 6), "diff": round(a - e, 6)})
+    return out
+
+
+def reconcile(conn: sqlite3.Connection, broker: Broker | None = None) -> dict:
+    """Compare the paper account with what the league says it should hold.
+    combined mode: per ticker, the sum of every agent's recorded share
+    (mirror_holdings). Returns {'checked': bool, 'mismatches': [...], ...}."""
+    m = mode()
+    if m != "combined":
+        return {"checked": False, "mode": m,
+                "note": "Reconciliation is built for MIRROR_MODE=combined (the mode in use)."}
+    if broker is None:
+        key, secret = keys_for(ledger.agent_ids(conn)[0])
+        broker = AlpacaPaperBroker(key, secret)
+    expected: dict[str, float] = {}
+    for r in conn.execute("SELECT ticker, qty FROM mirror_holdings"):
+        expected[r[0]] = expected.get(r[0], 0.0) + r[1]
+    actual = broker.positions()
+    mism = compare_positions(actual, expected)
+    return {"checked": True, "mode": m, "tickers": len(set(actual) | set(expected)), "mismatches": mism}

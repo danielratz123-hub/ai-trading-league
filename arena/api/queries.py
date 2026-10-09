@@ -287,6 +287,39 @@ def monthly_costs(conn) -> list[dict]:
     return out
 
 
+def daily_costs(conn, days: int = 30) -> list[dict]:
+    """Per UTC day and agent (newest first): turns, tokens and estimated AI
+    cost, decision + report turns, from the turn logs."""
+    out: dict[str, dict] = {}
+    for table in _TURN_TABLES:
+        for r in conn.execute(f"SELECT agent_id, model, substr(started_at, 1, 10) AS d, COUNT(*) AS n, "
+                              f"SUM(input_tokens) AS i, SUM(cached_tokens) AS c, SUM(cache_write_tokens) AS w, "
+                              f"SUM(output_tokens) AS o FROM {table} "
+                              f"WHERE started_at >= date('now', ?) GROUP BY agent_id, model, d",
+                              (f"-{days - 1} days",)):
+            e = out.setdefault(r["d"], {}).setdefault(r["agent_id"], {
+                "turns": 0, "tokens": 0, "output_tokens": 0, "est_ai_cost_usd": 0.0})
+            e["turns"] += r["n"]
+            e["tokens"] += (r["i"] or 0) + (r["c"] or 0) + (r["w"] or 0) + (r["o"] or 0)
+            e["output_tokens"] += r["o"] or 0
+            e["est_ai_cost_usd"] += estimated_ai_cost(r["agent_id"], r["model"], r["i"] or 0, r["c"] or 0,
+                                                      r["w"] or 0, r["o"] or 0)
+    return [{"day": d, "agents": {a: {**e, "est_ai_cost_usd": _r(e["est_ai_cost_usd"], 4)} for a, e in out[d].items()}}
+            for d in sorted(out, reverse=True)]
+
+
+def spy_week_return(conn, week_no: int) -> float | None:
+    """SPY over the same window a week is scored on: the open of its
+    execution day to the open of the next execution day."""
+    w = conn.execute("SELECT exec_date FROM weeks WHERE week_no=?", (week_no,)).fetchone()
+    nxt = conn.execute("SELECT exec_date FROM weeks WHERE week_no>? AND status IN ('executed','scored') "
+                       "ORDER BY week_no LIMIT 1", (week_no,)).fetchone()
+    if not w or not nxt:
+        return None
+    a, b = get_price(conn, "SPY", w["exec_date"], "open"), get_price(conn, "SPY", nxt["exec_date"], "open")
+    return _r(b / a - 1) if a and b else None
+
+
 def universe_info(conn) -> dict:
     """The S&P 500 list in use (see refresh-universe)."""
     def get(k):
@@ -360,7 +393,9 @@ def weeks(conn) -> list[dict]:
         bonus = conn.execute("SELECT * FROM bonuses WHERE period_end_week=?", (w["week_no"],)).fetchone()
         out.append({"week": w["week_no"], "decision_date": w["decision_date"], "exec_date": w["exec_date"],
                     "status": w["status"], "simulated": bool(w["simulate"]), "agents": agents,
-                    "bonus_winner": bonus["winner"] if bonus else None})
+                    "bonus_winner": bonus["winner"] if bonus else None,
+                    # The benchmark over the same window the week is scored on.
+                    "spy_return": spy_week_return(conn, w["week_no"]) if w["status"] == "scored" else None})
     return out
 
 
@@ -400,7 +435,8 @@ def costs(conn) -> dict:
                                 "api_cost_usd": _r(api, 4)}
         weekly.append(row)
     return {"totals": {a: cost_totals(conn, a) for a in ledger.agent_ids(conn)}, "weekly": weekly,
-            "monthly": monthly_costs(conn)}
+            "monthly": monthly_costs(conn), "daily": daily_costs(conn),
+            "daily_alert_usd": SETTINGS.daily_ai_cost_alert_usd}
 
 
 # --------------------------------------------------------------------------
