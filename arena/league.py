@@ -749,7 +749,7 @@ def new_simulation_db(source: sqlite3.Connection, path: Path) -> sqlite3.Connect
 
 
 def simulate(conn: sqlite3.Connection, start: str, weeks: int, factory: AgentFactory = make_agent,
-             progress: Callable[[str], None] = print) -> list[dict]:
+             progress: Callable[[str], None] = print, reports: bool = False) -> list[dict]:
     """Replay `weeks` past weeks with real agent turns on `conn` (use a
     simulation DB!). Web search is off and every tool is cut at the
     simulated decision date."""
@@ -775,6 +775,8 @@ def simulate(conn: sqlite3.Connection, start: str, weeks: int, factory: AgentFac
             progress(f"  scored week {rep.scored_week}: " +
                      ", ".join(f"{a} {r:+.2%}" for a, r in rep.weekly_returns.items()) +
                      (f"; bonus to {rep.bonus_winner}" if rep.bonus_winner else ""))
+            if reports:
+                _simulate_reports(conn, rep.scored_week, factory, progress)
         # Hold through the next week end (daily stops, fees, snapshots).
         for d in trading_days(conn, rep.exec_date, dates[i + 1]):
             if d != rep.exec_date:
@@ -785,7 +787,15 @@ def simulate(conn: sqlite3.Connection, start: str, weeks: int, factory: AgentFac
     progress(f"Scored final week {final.scored_week}: " +
              ", ".join(f"{a} {r:+.2%}" for a, r in final.weekly_returns.items()) +
              (f"; bonus to {final.bonus_winner}" if final.bonus_winner else ""))
+    if reports and final.scored_week:
+        _simulate_reports(conn, final.scored_week, factory, progress)
     return summary
+
+
+def _simulate_reports(conn, week_no: int, factory, progress) -> None:
+    from . import reports as rp
+    for r in rp.run_reports(conn, factory, simulate=True, weeks=[week_no]):
+        progress(f"  report week {r['week']} {r['agent']}: {r['status']}{' - ' + r['error'] if r.get('error') else ''}")
 
 
 def estimated_cost(weeks: int) -> float:

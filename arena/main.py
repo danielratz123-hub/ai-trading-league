@@ -30,6 +30,9 @@ League (times are US Eastern)
     hash-password    make DASHBOARD_PASSWORD_HASH for the dashboard login (asks for the password)
     scheduler        run decide / execute / daily automatically on US market time
     health           quick check (database, disk; --scheduler: heartbeat too); exit 1 if unhealthy
+    reports          write the weekly strategy reports for scored weeks that have none
+                     (the scheduler does this after execute; --week N --force to redo one)
+    refresh-universe download the current S&P 500 list (--source URL/CSV file; --date list date)
     backup           back up the database now (online backup API, compressed, uploaded if configured)
     backups          list the backups (local and remote)
     restore-backup   NAME|latest --to PATH: download, check and unpack a backup (used by scripts/restore.sh)
@@ -73,6 +76,9 @@ def cmd_update_calendar(conn, args) -> None:
 
 
 def _update_prices(conn, tickers) -> None:
+    # Held tickers too: one that has left the S&P 500 still needs prices.
+    held = [r[0] for r in conn.execute("SELECT DISTINCT ticker FROM positions")]
+    tickers = sorted(set(tickers) | set(held))
     source = prices.AlpacaPriceSource()
     print(f"Updating {len(tickers)} tickers (first run downloads history since "
           f"{SETTINGS.price_history_start}; this can take a few minutes)...")
@@ -266,7 +272,7 @@ def cmd_simulate(conn, args) -> None:
     sim = league.new_simulation_db(conn, sim_path)
     print(f"Simulation database: {sim_path} (the live league is untouched)")
     try:
-        league.simulate(sim, args.start, args.weeks)
+        league.simulate(sim, args.start, args.weeks, reports=args.reports)
         print()
         cmd_status(sim, args)
     finally:
@@ -479,6 +485,37 @@ def _storage():
     return remote_storage()
 
 
+def cmd_reports(conn, args) -> None:
+    from . import reports
+    from .agents import make_agent
+    if not SETTINGS.reports_enabled:
+        print("Strategy reports are switched off (REPORTS=0).")
+        return
+    done = reports.run_reports(conn, make_agent, weeks=[args.week] if args.week else None, force=args.force)
+    if not done:
+        print("No reports to write: every scored week has its reports.")
+    for r in done:
+        print(f"week {r['week']} {r['agent']}: {r['status']}" + (f" - {r['error']}" if r.get("error") else ""))
+
+
+def cmd_refresh_universe(conn, args) -> None:
+    from . import universe
+    source = args.source or universe.DEFAULT_SOURCE
+    rows, list_date = universe.fetch(source)
+    today = datetime.now(ET).date().isoformat()
+    diff = universe.refresh(conn, rows, today, source, args.date or list_date)
+    info = universe.list_info(conn)
+    print(f"S&P 500 list of {info['list_date']} from {source}: {info['members']} members.")
+    print(f"Added ({len(diff['added'])}): {', '.join(diff['added']) or '-'}")
+    print(f"Removed ({len(diff['removed'])}): {', '.join(diff['removed']) or '-'}"
+          + ("  (held positions in them can be kept or reduced, not increased)" if diff["removed"] else ""))
+    if diff["back"]:
+        print(f"Back in the index: {', '.join(diff['back'])}")
+    if diff["added"] and not args.no_update:
+        print("Downloading price history for the new tickers...")
+        _update_prices(conn, diff["added"])
+
+
 def cmd_backup(conn, args) -> None:
     from . import alerts
     from .backup import run_backup
@@ -561,6 +598,8 @@ COMMANDS = {
     "health": None,
     "hash-password": cmd_hash_password,
     "backup": cmd_backup,
+    "refresh-universe": cmd_refresh_universe,
+    "reports": cmd_reports,
     "backups": cmd_backups,
     "restore-backup": None,  # handled in main() before the database is opened
     "test-alert": cmd_test_alert,          # handled in main() before the database is opened
@@ -602,6 +641,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--no-browser", action="store_true", help="app: don't open the browser")
     parser.add_argument("--host", default="127.0.0.1", help="serve: address to listen on")
     parser.add_argument("--port", type=int, default=8000, help="serve: port")
+    parser.add_argument("--week", type=int, help="reports: the week to (re)write")
+    parser.add_argument("--force", action="store_true", help="reports: redo even if one exists")
+    parser.add_argument("--reports", action="store_true", help="simulate: also run the weekly report turns")
+    parser.add_argument("--source", help="refresh-universe: URL or CSV file (Symbol, Security, GICS Sector)")
     parser.add_argument("--to", help="restore-backup: where to write the restored database")
     parser.add_argument("--reason", help="check-logins: shown in the alert (e.g. 'before decide')")
     parser.add_argument("--scheduler", action="store_true", help="health: also check the scheduler heartbeat")

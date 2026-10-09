@@ -6,6 +6,7 @@
     calendar  Sundays at noon (refreshes holidays)
     check-logins  every day at 07:00, and 2 hours before every decide (08:00)
     backup    every day at 17:30 (after daily)
+    reports   trading days from 10:15, once execute has succeeded (weekly strategy reports)
 
     python -m arena.main scheduler
 
@@ -42,6 +43,7 @@ DECIDE_AT = (10, 0)                  # the morning after the week's last close
 CALENDAR_AT = (12, 0)                # Sundays
 LOGIN_CHECK_AT = (7, 0)              # daily
 BACKUP_AT = (17, 30)                 # daily, after the daily job (16:45)
+REPORTS_AT = (10, 15)                # after execute (09:50) has scored the week
 DISK_CHECK_EVERY = timedelta(hours=1)
 PRE_DECIDE_CHECK = timedelta(hours=2)
 TEMPFAIL = 75                        # "retry until fixed" (a login problem at decide)
@@ -49,7 +51,7 @@ CATCH_UP_DAYS = 4                    # don't replay days older than this after d
 MAX_ATTEMPTS = 3
 RETRY_AFTER = timedelta(minutes=30)
 TIMEOUTS = {"decide": 3 * 3600, "execute": 1800, "daily": 3600, "update-calendar": 600,
-            "backup": 1800, "check-logins": 1200}
+            "backup": 1800, "check-logins": 1200, "reports": 3600}
 
 
 
@@ -140,6 +142,11 @@ def due_jobs(now: datetime, calendar: dict[str, str], history: dict[tuple[str, s
             add("check-logins", None, f"pre-decide-{week_end}")
         if start <= now < end:
             add("decide", week_end)
+
+    # Strategy reports: after a successful execute (which scores the week).
+    executed = any(r["exit_code"] == 0 for r in history.get(("execute", today), []))
+    if today in calendar and executed and now >= _at(today, REPORTS_AT):
+        add("reports", None, f"reports-{today}")
 
     if now >= _at(today, BACKUP_AT):
         add("backup", None, f"backup-{today}")

@@ -54,12 +54,18 @@ def combined_weights(slots: list[SlotTarget]) -> dict[str, float]:
 
 
 def validate_portfolio(slots: list[SlotTarget], last_prices: dict[str, float] | None = None,
-                       limits: Limits = SETTINGS.limits) -> ValidationResult:
+                       limits: Limits = SETTINGS.limits,
+                       reduce_only: dict[tuple[int, str], float] | None = None) -> ValidationResult:
     """Check a proposed portfolio against every hard limit.
 
     last_prices (latest close per ticker) is only used to sanity-check stop
     and take-profit levels; pass None to skip that check.
+
+    reduce_only: {(slot, ticker): current weight in that slot} for tickers
+    that have left the S&P 500 but are still held. Such a ticker may stay in
+    its slot at the same or a smaller weight (same direction), never more.
     """
+    reduce_only = reduce_only or {}
     errors: list[str] = []
 
     # Structure
@@ -85,6 +91,13 @@ def validate_portfolio(slots: list[SlotTarget], last_prices: dict[str, float] | 
             errors.append(f"Slot {s.slot}: weights for {bad} are not valid numbers.")
             continue
         unknown = sorted(t for t in s.weights if not is_tradable(t))
+        for t in [t for t in unknown if (s.slot, t) in reduce_only]:
+            unknown.remove(t)
+            held, w = reduce_only[(s.slot, t)], s.weights[t]
+            # 2% slack: the held weight drifts with prices between the close and the open.
+            if w != 0 and (w * held <= 0 or abs(w) > abs(held) * 1.02 + EPS):
+                errors.append(f"Slot {s.slot}: {t} has left the S&P 500, so it can only be held or "
+                              f"reduced: weight now {held:+.4f} of the slot, you asked {w:+.4f}.")
         if unknown:
             errors.append(f"Slot {s.slot}: {unknown} not in the tradable universe "
                           f"(S&P 500 + major ETFs).")

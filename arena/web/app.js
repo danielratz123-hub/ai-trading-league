@@ -76,6 +76,7 @@ function renderStatus(s) {
   if (lv && lv.market_open && lv.updated) parts.push(`● LIVE ${lv.updated} ET (prices refresh every 2 min)`);
   else if (s.as_of) parts.push(`as of ${s.as_of} close`);
   if (!parts.length) parts.push("Not started yet");
+  if (s.data_feed_label) parts.push(s.data_feed_label);   // e.g. "IEX feed" (ALPACA_DATA_FEED)
   document.getElementById("status-line").textContent = parts.join(" · ");
   document.getElementById("paused-badge").hidden = !s.paused;
 }
@@ -240,7 +241,8 @@ document.querySelectorAll(".segmented button").forEach(b => b.addEventListener("
 
 function setupTabs() {
   const tabs = [...(state.status?.agents || []).map(a => ({ id: a.id, name: label(a.id) })),
-                { id: "timeline", name: "Weekly timeline" }, { id: "research", name: "Research & costs" },
+                { id: "timeline", name: "Weekly timeline" }, { id: "reports", name: "Reports" },
+                { id: "research", name: "Research & costs" },
                 ...(state.mirrorMode && state.mirrorMode !== "off" ? [{ id: "alpaca", name: "Alpaca" }] : [])];
   if (!state.tab || !tabs.some(t => t.id === state.tab)) state.tab = storageGet("sessionStorage", "tab") || tabs[0].id;
   if (!tabs.some(t => t.id === state.tab)) state.tab = tabs[0].id;
@@ -258,6 +260,7 @@ async function renderTab() {
   const el = document.getElementById("tab-panels");
   const tab = state.tab;
   if (tab === "timeline") return renderTimeline(el, await get("/api/weeks"));
+  if (tab === "reports") return renderReports(el, await get("/api/reports"));
   if (tab === "alpaca") return renderMirror(el, await get("/api/mirror"));
   if (tab === "research") {
     const [research, costs] = await Promise.all([get("/api/research"), get("/api/costs")]);
@@ -388,6 +391,63 @@ function renderTimeline(el, weeks) {
     </article>`).join("")}</div>`;
 }
 
+// ------------------------------------------------------------------ strategy reports
+
+function reportSideHtml(id, a) {
+  const head = `<h3>${esc(label(id))}</h3>`;
+  if (!a) return `<div class="side" style="--c:var(${agentVar(id)})">${head}<p class="muted">No report.</p></div>`;
+  if (a.status !== "accepted" || !a.report) {
+    const why = a.status === "running" ? "Being written…" : `Report failed: ${esc(a.error || "no report")}`;
+    return `<div class="side" style="--c:var(${agentVar(id)})">${head}<p class="${a.status === "running" ? "muted" : "neg"}">${why}</p></div>`;
+  }
+  const r = a.report;
+  const tick = t => t ? `${esc(t.ticker)} <span class="${signClass(t.pnl)}">${money(t.pnl)}</span>` : "–";
+  const slots = r.slots.map(s => `<div class="slotline">
+      <b>Slot ${esc(s.slot)}: ${esc(s.name)}</b> <span class="muted">${s.type ? `[${esc(s.type)}] ` : ""}${pct(s.allocation, false)} of equity</span>
+      <div class="report-nums small">
+        <span>Return <b class="${signClass(s.slot_return)}">${pct(s.slot_return)}</b></span>
+        <span>Contribution <b class="${signClass(s.contribution)}">${pct(s.contribution)}</b></span>
+        <span>P&amp;L <b class="${signClass(s.pnl_usd)}">${money(s.pnl_usd)}</b></span>
+        <span>Hit rate <b>${s.hit_rate == null ? "–" : pct(s.hit_rate, false)}</b> of ${s.positions}</span>
+        <span>Costs <b>${money(s.costs.total)}</b></span>
+        <span>Best ${tick(s.biggest_winner)}</span><span>Worst ${tick(s.biggest_loser)}</span>
+      </div>
+      <dl class="report-words">
+        <dt>Worked</dt><dd>${esc(s.what_worked)}</dd>
+        <dt>Didn't</dt><dd>${esc(s.what_didnt)}</dd>
+        <dt>Improve</dt><dd>${esc(s.what_to_improve)}</dd>
+        ${s.what_to_preserve.length ? `<dt>Preserve</dt><dd>${s.what_to_preserve.map(p =>
+          `<div><span class="chip" title="times this lesson was marked">${esc(p.key)} ×${p.times}</span> ${esc(p.text)}</div>`).join("")}</dd>` : ""}
+      </dl>
+    </div>`).join("") || `<p class="muted">All cash that week.</p>`;
+  return `<div class="side" style="--c:var(${agentVar(id)})">${head}
+    <div class="result"><span class="${signClass(r.weekly_return)}">${pct(r.weekly_return)}</span>${r.point ? " · ★ point" : ""}</div>
+    <p class="view">${esc(r.summary)}</p>${slots}
+    <details><summary class="small">text version</summary><pre class="code">${esc(a.text)}</pre></details></div>`;
+}
+
+function renderReports(el, data) {
+  const ids = (state.status?.agents || []).map(a => a.id);
+  const lessons = ids.map(id => {
+    const items = (data.preserve[id] || []).filter(p => p.times > 1).slice(0, 8);
+    return `<div class="side" style="--c:var(${agentVar(id)})"><h3>${esc(label(id))}</h3>${items.length
+      ? items.map(p => `<div><span class="chip">${esc(p.key)} ×${p.times}</span> <span class="small">${esc(p.text)}</span></div>`).join("")
+      : `<p class="muted small">No repeated lessons yet.</p>`}</div>`;
+  }).join("");
+  const weeks = data.weeks.map(w => `
+    <article class="week">
+      <div class="week-head"><h2>Week ${w.week}${w.simulated ? " (simulated)" : ""}</h2>
+        <span class="muted small">decided ${esc(w.decision_date)} · traded ${esc(w.exec_date)} · scored</span></div>
+      <div class="grid-2">${ids.map(id => reportSideHtml(id, w.agents[id])).join("")}</div>
+    </article>`).join("");
+  el.innerHTML = `<div class="tab-panel">
+    <p class="muted small">After each week is scored, each AI reviews its own strategies. The numbers come from the
+      engine; the words are the AI's. Reports appear only once their week is scored.</p>
+    <section class="panel"><h2>Lessons each AI keeps marking to preserve</h2><div class="grid-2">${lessons}</div></section>
+    ${weeks || `<p class="muted">No reports yet: the first ones are written after week 1 is scored.</p>`}
+  </div>`;
+}
+
 // ------------------------------------------------------------------ research & costs
 
 function renderResearch(el, research, costs) {
@@ -409,7 +469,35 @@ function renderResearch(el, research, costs) {
       const c = w.agents[id] || {};
       return `<td class="num">${money(c.commissions)}</td><td class="num">${money(c.slippage)}</td><td class="num">${money(c.borrow_fees)}</td>`;
     }).join("")}</tr>`).join("");
+  // Web searches per weekly turn, side by side, against the soft limit.
+  const lim = state.status?.web_search_soft_limit;
+  const maxS = Math.max(1, lim || 0, ...research.flatMap(w => ids.map(id => w.agents[id]?.web_searches || 0)));
+  const sRows = research.map(w => `<tr><td>${w.week}</td>${ids.map(id => {
+      const a = w.agents[id];
+      if (!a) return `<td class="muted">–</td>`;
+      const over = lim != null && a.web_searches > lim;
+      return `<td><div class="bar-cell"><div class="bar" style="width:${(a.web_searches / maxS * 100).toFixed(1)}%;background:var(${agentVar(id)})"></div>
+        <span class="num ${over ? "neg" : ""}">${a.web_searches}${over ? " ▲" : ""}</span></div></td>`;
+    }).join("")}</tr>`).join("") || `<tr><td colspan="${1 + ids.length}" class="muted">No turns yet</td></tr>`;
+  const mRows = (costs.monthly || []).map(m => ids.map((id, i) => {
+      const c = m.agents[id] || {};
+      return `<tr>${i === 0 ? `<td rowspan="${ids.length}">${esc(m.month)}</td>` : ""}<td>${esc(label(id))}</td>
+        <td class="num">${(c.turns || 0)} + ${(c.report_turns || 0)}</td>
+        <td class="num">${((c.input_tokens || 0) + (c.cached_tokens || 0) + (c.cache_write_tokens || 0)).toLocaleString()}</td>
+        <td class="num">${(c.output_tokens || 0).toLocaleString()}</td><td class="num">${(c.web_searches || 0)}</td>
+        <td class="num">${money(c.est_ai_cost_usd || 0)}</td>
+        <td class="num">${money((c.commissions || 0) + (c.slippage || 0) + (c.borrow_fees || 0))}</td></tr>`;
+    }).join("")).join("") || `<tr><td colspan="8" class="muted">No usage yet</td></tr>`;
   el.innerHTML = `<div class="tab-panel">
+    <section class="panel"><h2>Web searches per weekly turn</h2>
+      <p class="muted small">Soft limit ${lim ?? "–"} per turn, the same for both (written into each briefing, not enforced).
+        ▲ = above the limit.</p>
+      <div class="scroll"><table><tr><th>Week</th>${ids.map(id => `<th>${esc(label(id))}</th>`).join("")}</tr>${sRows}</table></div></section>
+    <section class="panel"><h2>Usage and costs per month</h2>
+      <div class="scroll"><table><tr><th>Month</th><th>Agent</th><th class="num">Turns + reports</th><th class="num">Input tokens</th>
+        <th class="num">Output tokens</th><th class="num">Web searches</th><th class="num">Est. AI cost</th><th class="num">Trading costs</th></tr>${mRows}</table></div>
+      <p class="muted small">Est. AI cost = the tokens priced at pay-per-token API rates (config.py). On Claude / ChatGPT
+        subscriptions you don't pay this; it shows the size of the usage. Trading costs = commissions + slippage + borrow fees.</p></section>
     <section class="panel"><h2>Research activity</h2>
       <div class="scroll"><table>${rHead}${rRows}</table></div></section>
     <section class="panel"><h2>Costs (all time)</h2>

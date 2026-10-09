@@ -40,6 +40,10 @@ def league_status(conn) -> dict:
                    for a in ledger.agent_ids(conn)],
         "latest_week": dict(week) if week else None,
         "starting_cash": SETTINGS.starting_cash,
+        "data_feed": SETTINGS.data_feed,
+        "data_feed_label": f"{SETTINGS.data_feed.upper()} feed",
+        "universe": universe_info(conn),
+        "web_search_soft_limit": SETTINGS.web_search_soft_limit,
         "bonus_every_weeks": SETTINGS.bonus_every_weeks,
         "bonus_amount": SETTINGS.bonus_amount,
     }
@@ -215,14 +219,111 @@ def _side(shares: float) -> str:
     return "buy" if shares > 0 else "sell"
 
 
+_TURN_TABLES = ("agent_turns", "strategy_reports")      # decision turns + report turns
+
+
 def cost_totals(conn, agent_id: str) -> dict:
     t = conn.execute("SELECT COALESCE(SUM(commission),0), COALESCE(SUM(slippage_cost),0) FROM trades "
                      "WHERE agent_id=?", (agent_id,)).fetchone()
     b = conn.execute("SELECT COALESCE(SUM(amount),0) FROM borrow_fees WHERE agent_id=?", (agent_id,)).fetchone()[0]
-    a = conn.execute("SELECT COALESCE(SUM(cost_usd),0), COALESCE(SUM(input_tokens+cached_tokens+cache_write_tokens),0), "
-                     "COALESCE(SUM(output_tokens),0) FROM agent_turns WHERE agent_id=?", (agent_id,)).fetchone()
+    api = inp = out = 0
+    for table in _TURN_TABLES:     # report turns count too
+        a = conn.execute(f"SELECT COALESCE(SUM(cost_usd),0), COALESCE(SUM(input_tokens+cached_tokens+cache_write_tokens),0), "
+                         f"COALESCE(SUM(output_tokens),0) FROM {table} WHERE agent_id=?", (agent_id,)).fetchone()
+        api, inp, out = api + a[0], inp + a[1], out + a[2]
     return {"commissions": _r(t[0], 2), "slippage": _r(t[1], 2), "borrow_fees": _r(b, 2),
-            "api_cost_usd": _r(a[0], 2), "input_tokens": a[1], "output_tokens": a[2]}
+            "api_cost_usd": _r(api, 2), "input_tokens": inp, "output_tokens": out}
+
+
+def _price_key(agent_id: str, model: str | None) -> str:
+    if model and model in SETTINGS.prices_per_mtok:
+        return model
+    return "gpt" if agent_id == "gpt" or (model or "").startswith("gpt") else "claude-opus-5-5"
+
+
+def estimated_ai_cost(agent_id: str, model: str | None, inp: int, cached: int, write: int, out: int) -> float:
+    """What these tokens would cost on the pay-per-token API, from the price
+    table in config.py. On subscriptions you don't pay this; it shows the
+    size of the usage in money terms."""
+    p_in, p_cached, p_write, p_out = SETTINGS.prices_per_mtok[_price_key(agent_id, model)]
+    return (inp * p_in + cached * p_cached + write * p_write + out * p_out) / 1e6
+
+
+def monthly_costs(conn) -> list[dict]:
+    """Per calendar month and agent: tokens and estimated AI cost (decision
+    + report turns, from the turn logs) next to the trading costs."""
+    months: dict[str, dict] = {}
+
+    def slot(month, agent):
+        return months.setdefault(month, {}).setdefault(agent, {
+            "turns": 0, "report_turns": 0, "input_tokens": 0, "cached_tokens": 0, "cache_write_tokens": 0,
+            "output_tokens": 0, "web_searches": 0, "est_ai_cost_usd": 0.0, "api_cost_usd": 0.0,
+            "commissions": 0.0, "slippage": 0.0, "borrow_fees": 0.0})
+
+    for table in _TURN_TABLES:
+        for r in conn.execute(f"SELECT agent_id, model, substr(started_at, 1, 7) AS m, COUNT(*) AS n, "
+                              f"SUM(input_tokens) AS i, SUM(cached_tokens) AS c, SUM(cache_write_tokens) AS w, "
+                              f"SUM(output_tokens) AS o, SUM(web_searches) AS s, SUM(cost_usd) AS api "
+                              f"FROM {table} GROUP BY agent_id, model, m"):
+            e = slot(r["m"], r["agent_id"])
+            e["report_turns" if table == "strategy_reports" else "turns"] += r["n"]
+            for k, col in (("input_tokens", "i"), ("cached_tokens", "c"), ("cache_write_tokens", "w"),
+                           ("output_tokens", "o"), ("web_searches", "s")):
+                e[k] += r[col] or 0
+            e["api_cost_usd"] += r["api"] or 0.0
+            e["est_ai_cost_usd"] += estimated_ai_cost(r["agent_id"], r["model"], r["i"] or 0, r["c"] or 0,
+                                                      r["w"] or 0, r["o"] or 0)
+    for r in conn.execute("SELECT agent_id, substr(date, 1, 7) AS m, SUM(commission) AS c, SUM(slippage_cost) AS s "
+                          "FROM trades GROUP BY agent_id, m"):
+        e = slot(r["m"], r["agent_id"])
+        e["commissions"], e["slippage"] = r["c"] or 0.0, r["s"] or 0.0
+    for r in conn.execute("SELECT agent_id, substr(date, 1, 7) AS m, SUM(amount) AS b FROM borrow_fees "
+                          "GROUP BY agent_id, m"):
+        slot(r["m"], r["agent_id"])["borrow_fees"] = r["b"] or 0.0
+    out = []
+    for m in sorted(months, reverse=True):
+        out.append({"month": m, "agents": {a: {k: (_r(v, 4) if isinstance(v, float) else v) for k, v in e.items()}
+                                           for a, e in months[m].items()}})
+    return out
+
+
+def universe_info(conn) -> dict:
+    """The S&P 500 list in use (see refresh-universe)."""
+    def get(k):
+        r = conn.execute("SELECT value FROM league_state WHERE key=?", (k,)).fetchone()
+        return r[0] if r else None
+    try:
+        n = conn.execute("SELECT COUNT(*) FROM universe_members WHERE removed_on IS NULL").fetchone()[0]
+    except sqlite3.OperationalError:
+        n = 0
+    if not n:
+        from ..universe import SNAPSHOT_LABEL, _build
+        return {"list_date": None, "source": SNAPSHOT_LABEL, "members": sum(1 for s in _build().values() if s != "ETF")}
+    return {"list_date": get("universe_list_date"), "source": get("universe_source"), "members": n}
+
+
+def reports(conn) -> list[dict]:
+    """Both agents' strategy reports per week, side by side. Only for scored
+    weeks (the fairness rule): a report is never shown before its week is."""
+    out = []
+    for w in conn.execute("SELECT week_no, decision_date, exec_date, simulate FROM weeks WHERE status='scored' "
+                          "ORDER BY week_no DESC").fetchall():
+        agents = {}
+        for r in conn.execute("SELECT * FROM strategy_reports WHERE week_no=?", (w["week_no"],)):
+            agents[r["agent_id"]] = {
+                "status": r["status"], "error": r["error"],
+                "report": json.loads(r["report_json"]) if r["report_json"] else None,
+                "text": r["report_text"]}
+        if agents:
+            out.append({"week": w["week_no"], "decision_date": w["decision_date"], "exec_date": w["exec_date"],
+                        "simulated": bool(w["simulate"]), "agents": agents})
+    return out
+
+
+def preserve_repeats(conn) -> dict[str, list[dict]]:
+    from ..reports import preserve_counts
+    return {a: sorted(({"key": k, **v} for k, v in preserve_counts(conn, a).items()), key=lambda x: -x["times"])
+            for a in ledger.agent_ids(conn)}
 
 
 # --------------------------------------------------------------------------
@@ -277,7 +378,8 @@ def research(conn) -> list[dict]:
                 "submit_attempts": t["attempts"], "model_calls": t["model_calls"], "by_tool": tools,
                 "input_tokens": t["input_tokens"] + t["cached_tokens"] + t["cache_write_tokens"],
                 "output_tokens": t["output_tokens"], "api_cost_usd": _r(t["cost_usd"], 4)}
-        out.append({"week": w["week_no"], "decision_date": w["decision_date"], "agents": per_agent})
+        out.append({"week": w["week_no"], "decision_date": w["decision_date"], "agents": per_agent,
+                    "web_search_soft_limit": SETTINGS.web_search_soft_limit})
     return out
 
 
@@ -297,7 +399,8 @@ def costs(conn) -> dict:
             row["agents"][a] = {"commissions": _r(t[0], 2), "slippage": _r(t[1], 2), "borrow_fees": _r(b, 2),
                                 "api_cost_usd": _r(api, 4)}
         weekly.append(row)
-    return {"totals": {a: cost_totals(conn, a) for a in ledger.agent_ids(conn)}, "weekly": weekly}
+    return {"totals": {a: cost_totals(conn, a) for a in ledger.agent_ids(conn)}, "weekly": weekly,
+            "monthly": monthly_costs(conn)}
 
 
 # --------------------------------------------------------------------------

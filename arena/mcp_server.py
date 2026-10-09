@@ -11,6 +11,10 @@ The CLI starts this process itself (see agents/cli.py), one per turn:
         --week 3 --turn-id 7 --result C:/tmp/result.json [--simulate]
 
 The league reads the outcome from the --result JSON file after the CLI exits.
+
+With --report the server is a ReportServer instead: the weekly strategy
+report turn (arena/reports.py). It opens the database READ-ONLY and its
+tools only ever query the agent's own rows.
 """
 from __future__ import annotations
 
@@ -106,6 +110,89 @@ class TurnServer:
             self.conn.close()
 
 
+REPORT_TOOL_SPECS = [
+    {"name": "get_week_numbers", "description": "The engine's numbers for the scored week: per slot return, "
+     "P&L, contribution, biggest winner/loser, costs, hit rate, and P&L per ticker.",
+     "parameters": {"type": "object", "properties": {}}},
+    {"name": "get_week_trades", "description": "Your trades in that week (including the opening rebalance), "
+     "with the reason you gave for each.", "parameters": {"type": "object", "properties": {}}},
+    {"name": "get_my_decision", "description": "The decision you submitted for that week.",
+     "parameters": {"type": "object", "properties": {}}},
+    {"name": "get_past_reports", "description": "Your previous weekly reports (newest first).",
+     "parameters": {"type": "object", "properties": {"n": {"type": "integer", "minimum": 1, "maximum": 4}}}},
+]
+
+
+class ReportServer:
+    """Tools for the weekly report turn: read-only, own data only, small budget."""
+
+    def __init__(self, args):
+        import sqlite3
+
+        from . import reports
+        self.args, self.reports = args, reports
+        self.result_path = Path(args.result)
+        self.state = {"accepted": False, "report": None, "attempts": 0, "last_errors": [], "tool_calls": 0}
+        self.conn = sqlite3.connect(f"file:{Path(args.db).resolve().as_posix()}?mode=ro", uri=True)
+        self.conn.row_factory = sqlite3.Row
+        self.agent, self.week = args.agent, args.week
+        self.numbers = reports.week_numbers(self.conn, self.agent, self.week)
+        self.specs = REPORT_TOOL_SPECS + [reports.SUBMIT_REPORT_SPEC]
+        self._save()
+
+    _save = TurnServer._save
+    list_tools = TurnServer.list_tools
+
+    def call(self, name: str, arguments: dict) -> tuple[str, bool]:
+        if name == "submit_report":
+            return self._submit(arguments)
+        if self.state["tool_calls"] >= SETTINGS.report_max_tool_calls:
+            return "Tool budget used up: call submit_report now.", True
+        self.state["tool_calls"] += 1
+        self._save()
+        a, w = self.agent, self.week
+        if name == "get_week_numbers":
+            return json.dumps(self.numbers), False
+        if name == "get_week_trades":
+            win = self.reports.week_window(self.conn, a, w)
+            if win is None:
+                return "[]", False
+            rows = self.conn.execute(
+                "SELECT date, slot, ticker, shares, fill_price, value, commission, slippage_cost, reason, note "
+                "FROM trades WHERE agent_id=? AND seq>? AND seq<=? ORDER BY seq",
+                (a, win["cost_from_seq"], win["s1"]["seq"])).fetchall()
+            return json.dumps([dict(r) for r in rows]), False
+        if name == "get_my_decision":
+            r = self.conn.execute("SELECT decision_json FROM agent_turns WHERE week_no=? AND agent_id=? "
+                                  "AND status='accepted'", (w, a)).fetchone()
+            return (r["decision_json"] if r and r["decision_json"] else "No accepted decision that week."), False
+        if name == "get_past_reports":
+            n = max(1, min(4, int(arguments.get("n", 4))))
+            rows = self.conn.execute("SELECT report_text FROM strategy_reports WHERE agent_id=? AND week_no<? "
+                                     "AND status='accepted' ORDER BY week_no DESC LIMIT ?", (a, w, n)).fetchall()
+            return ("\n\n".join(r["report_text"] for r in rows) or "No earlier reports."), False
+        return f"Unknown tool {name!r}", True
+
+    def _submit(self, report: dict) -> tuple[str, bool]:
+        s = self.state
+        if s["accepted"]:
+            return "Ignored: your report was already accepted.", True
+        if s["attempts"] >= 3:
+            return "No retries left.", True
+        s["attempts"] += 1
+        errors = self.reports.check_report(report, self.numbers) if self.numbers else ["The week isn't scored."]
+        s["last_errors"] = errors
+        if errors:
+            self._save()
+            return "Report REJECTED:\n- " + "\n- ".join(errors) + "\nFix it and call submit_report again.", True
+        s.update(accepted=True, report=report)
+        self._save()
+        return "Report ACCEPTED. You're done; you can stop now.", False
+
+    def close(self) -> None:
+        self.conn.close()
+
+
 def handle(server: TurnServer, msg: dict) -> dict | None:
     """One JSON-RPC message in, one reply out (None for notifications)."""
     method, msg_id, params = msg.get("method"), msg.get("id"), msg.get("params") or {}
@@ -158,6 +245,7 @@ def main() -> None:
     p.add_argument("--result", required=True)
     p.add_argument("--simulate", action="store_true")
     p.add_argument("--probe", action="store_true", help="expose only a 'ping' tool (check-agents)")
+    p.add_argument("--report", action="store_true", help="the weekly report turn (read-only tools)")
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 
@@ -165,7 +253,7 @@ def main() -> None:
     # corrupt it, so send stray prints to stderr.
     protocol_out = sys.stdout
     sys.stdout = sys.stderr
-    server = TurnServer(args)
+    server = ReportServer(args) if args.report else TurnServer(args)
     try:
         serve(server, sys.stdin, protocol_out)
     finally:

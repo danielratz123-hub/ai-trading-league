@@ -152,6 +152,10 @@ def create_app() -> FastAPI:
         state = live.LIVE.state() if live.LIVE else {"enabled": False, "market_open": False}
         return queries.live_snapshot(conn, state)
 
+    @app.get("/api/reports")
+    def strategy_reports(conn=Depends(read_conn)):
+        return {"weeks": queries.reports(conn), "preserve": queries.preserve_repeats(conn)}
+
     @app.get("/api/costs")
     def costs(conn=Depends(read_conn)):
         return queries.costs(conn)

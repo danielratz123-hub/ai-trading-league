@@ -184,11 +184,28 @@ def build(conn: sqlite3.Connection, agent_id: str, week_no: int, decision_date: 
         lines.append(f"- Week {t['week_no']} ({outcome}): view: {str(d.get('market_view', ''))[:500]}\n"
                      f"  slots: {slots_s or 'all cash'}\n  notes_to_self: {str(d.get('notes_to_self', ''))[:1500]}")
 
+    # Strategy reports -------------------------------------------------
+    from ..reports import briefing_section
+    lines += briefing_section(conn, agent_id, week_no)
+
+    # Universe changes ---------------------------------------------------
+    from .. import universe
+    info = universe.list_info(conn)
+    held_removed = sorted({p["ticker"] for p in ledger.positions(conn, agent_id)} & set(universe.REMOVED))
+    lines += ["", "## Universe",
+              (f"S&P 500 list dated {info['list_date']}" if info["list_date"] else "The built-in S&P 500 list")
+              + f" ({info['members']} stocks) + the ETFs listed in the rules."]
+    if held_removed:
+        lines.append(f"You hold {', '.join(held_removed)}, which left the S&P 500: you may keep or reduce "
+                     f"these positions (same direction, same or smaller weight in the same slot), not add to them.")
+
     # Budget -------------------------------------------------------------
     lines += ["", "## This turn",
               f"Research budget: {budget_calls} tool calls (web searches count too) and ${budget_usd:.2f} "
               f"of API spend. When it runs out, submit immediately.",
-              "Web search: " + ("available." if not simulate else
+              "Web search: " + (f"available. Soft limit: about {SETTINGS.web_search_soft_limit} searches "
+                                f"this turn (the same for both agents; your count is shown on the "
+                                f"public dashboard next to your opponent's)." if not simulate else
                                 "DISABLED (this is a simulation of a past week; using knowledge of what "
                                 "happened after the decision date defeats the purpose)."),
               "When ready, call submit_decision. Example:",

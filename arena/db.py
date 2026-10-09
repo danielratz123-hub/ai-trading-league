@@ -270,6 +270,40 @@ CREATE TABLE IF NOT EXISTS slot_runs (
     error     TEXT
 );
 
+-- Weekly strategy reports: written by each agent after a week is scored.
+-- report_json = the agent's own words per slot + the engine's numbers
+-- (filled in from this database, never taken from the agent).
+CREATE TABLE IF NOT EXISTS strategy_reports (
+    week_no       INTEGER NOT NULL,
+    agent_id      TEXT NOT NULL,
+    status        TEXT NOT NULL,       -- running | accepted | failed
+    model         TEXT,
+    report_json   TEXT,
+    report_text   TEXT,
+    error         TEXT,
+    tool_calls    INTEGER NOT NULL DEFAULT 0,
+    web_searches  INTEGER NOT NULL DEFAULT 0,
+    input_tokens  INTEGER NOT NULL DEFAULT 0,
+    cached_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd      REAL NOT NULL DEFAULT 0,
+    started_at    TEXT NOT NULL,
+    finished_at   TEXT,
+    PRIMARY KEY (week_no, agent_id)
+);
+
+-- The S&P 500 list in use (refresh-universe). Empty = the snapshot built
+-- into universe.py. removed_on is set when a ticker leaves the index:
+-- positions in it can be held or reduced, never increased.
+CREATE TABLE IF NOT EXISTS universe_members (
+    ticker      TEXT PRIMARY KEY,
+    sector      TEXT NOT NULL,
+    name        TEXT,
+    added_on    TEXT NOT NULL,
+    removed_on  TEXT
+);
+
 CREATE TABLE IF NOT EXISTS scores (
     week_no        INTEGER NOT NULL,
     agent_id       TEXT NOT NULL,
@@ -363,6 +397,8 @@ def connect(path: str | Path = ":memory:") -> sqlite3.Connection:
         conn.execute("PRAGMA journal_mode = WAL")
     conn.executescript(SCHEMA)
     _migrate(conn)
+    from . import universe
+    universe.load(conn)        # the S&P 500 list this league uses (refresh-universe)
     return conn
 
 

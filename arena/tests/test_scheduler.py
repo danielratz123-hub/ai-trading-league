@@ -177,3 +177,17 @@ def test_check_logins_job_says_why_it_runs():
     from arena.scheduler import Job
     argv = Job("check-logins", "pre-decide-2024-03-08", None).argv("arena.db")
     assert argv[-2:] == ["--reason", "pre-decide-2024-03-08"]
+
+
+def test_reports_run_after_a_successful_execute():
+    done = {("execute", "2024-03-11"): [{"exit_code": 0, "started_at": at("2024-03-11 09:50")}]}
+    failed = {("execute", "2024-03-11"): [{"exit_code": 1, "started_at": at("2024-03-11 09:50")}]}
+    assert ("reports", "reports-2024-03-11") not in names("2024-03-11 10:14", done)
+    assert ("reports", "reports-2024-03-11") in names("2024-03-11 10:15", done)
+    assert ("reports", "reports-2024-03-11") not in names("2024-03-11 10:15", failed)
+    assert not any(j == "reports" for j, _ in names("2024-03-09 11:00"))      # Saturday
+
+
+def test_backup_runs_daily_after_daily():
+    assert ("backup", "backup-2024-03-09") in names("2024-03-09 17:30")       # weekends too
+    assert ("backup", "backup-2024-03-11") not in names("2024-03-11 17:29")

@@ -100,7 +100,21 @@ class Settings:
 
     # Price data
     price_history_start: str = "2015-01-01"
-    data_feed: str = os.getenv("ALPACA_DATA_FEED", "sip")  # falls back to iex automatically
+    # The one data-feed setting: "iex" (free plan) or "sip" (paid, all US
+    # exchanges). If Alpaca refuses SIP, the code falls back to IEX.
+    data_feed: str = os.getenv("ALPACA_DATA_FEED", "iex").strip().lower() or "iex"
+
+    # Web searches per agent per weekly turn: a soft limit written into the
+    # briefing (the same number for both agents). Not enforced by the engine;
+    # the dashboard shows the actual counts side by side.
+    web_search_soft_limit: int = int(os.getenv("WEB_SEARCH_SOFT_LIMIT", "15"))
+
+    # Weekly strategy reports (arena/reports.py): one short turn per agent
+    # after each scored week. Read-only tools on the agent's own data only.
+    reports_enabled: bool = os.getenv("REPORTS", "1") == "1"
+    report_timeout_sec: int = int(os.getenv("REPORT_TIMEOUT_SEC", "600"))
+    report_max_tool_calls: int = int(os.getenv("REPORT_MAX_TOOL_CALLS", "8"))
+    reports_in_briefing: int = 4
 
 
 SETTINGS = Settings()

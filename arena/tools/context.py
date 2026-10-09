@@ -54,7 +54,15 @@ class ResearchContext:
 
     @property
     def universe(self) -> dict[str, str]:
-        return dict(SECTOR_OF)
+        """Tradable tickers -> sector, plus held tickers that have left the
+        S&P 500 (hold or reduce only), so the agent can still research them."""
+        from .. import universe
+        out = dict(SECTOR_OF)
+        if universe.REMOVED:
+            for r in self.conn.execute("SELECT DISTINCT ticker FROM positions WHERE agent_id=?", (self.agent_id,)):
+                if r[0] in universe.REMOVED:
+                    out[r[0]] = universe.REMOVED[r[0]]
+        return out
 
     def close_session(self) -> None:
         if self._data_file is not None:

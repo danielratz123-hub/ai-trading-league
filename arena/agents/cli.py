@@ -57,7 +57,7 @@ class CliRun:
 
 
 def mcp_launch(db_path: str, agent_id: str, decision_date: str, week_no: int, turn_id: int,
-               result_path: str, simulate: bool, probe: bool = False) -> McpLaunch:
+               result_path: str, simulate: bool, probe: bool = False, report: bool = False) -> McpLaunch:
     args = ["-m", "arena.mcp_server", "--db", str(db_path), "--agent", agent_id,
             "--date", decision_date, "--week", str(week_no), "--turn-id", str(turn_id),
             "--result", str(result_path)]
@@ -65,6 +65,8 @@ def mcp_launch(db_path: str, agent_id: str, decision_date: str, week_no: int, tu
         args.append("--simulate")
     if probe:
         args.append("--probe")
+    if report:
+        args.append("--report")
     return McpLaunch(sys.executable, args, {"PYTHONPATH": str(PROJECT_ROOT), "PYTHONIOENCODING": "utf-8"})
 
 

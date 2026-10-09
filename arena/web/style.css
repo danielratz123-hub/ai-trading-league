@@ -209,3 +209,14 @@ input, select { font: inherit; padding: 7px 9px; border-radius: 6px; border: 1px
 .banner { background: var(--surface); border: 1px solid var(--accent); border-radius: var(--radius); padding: 12px 16px; margin: 0; }
 td.why { min-width: 220px; max-width: 420px; color: var(--ink-2); font-size: 0.82rem; }
 .badge.live { font-size: 0.7rem; vertical-align: middle; }
+
+/* Strategy reports */
+.report-nums { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 4px 0; color: var(--ink-2); }
+.report-nums b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.report-words { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 6px 0 0; font-size: 0.86rem; }
+.report-words dt { color: var(--ink-2); font-weight: 600; }
+.report-words dd { margin: 0; white-space: pre-wrap; }
+
+/* Web searches side by side */
+.bar-cell { display: flex; align-items: center; gap: 8px; min-width: 140px; }
+.bar-cell .bar { height: 8px; border-radius: 4px; min-width: 2px; opacity: 0.85; }

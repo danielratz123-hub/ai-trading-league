@@ -11,7 +11,7 @@ import json
 import math
 from dataclasses import dataclass, field
 
-from .. import risk
+from .. import ledger, risk
 from ..config import SETTINGS
 from ..ledger import SlotTarget
 from ..prices import price_on_or_before
@@ -166,7 +166,8 @@ def check(ctx: ResearchContext, raw: dict) -> Checked:
             p = price_on_or_before(conn, ticker, ctx.decision_date)
             if p:
                 last_prices[ticker] = p[1]
-    res = risk.validate_portfolio(targets, last_prices)
+    res = risk.validate_portfolio(targets, last_prices,
+                                  reduce_only=held_removed_weights(conn, ctx.agent_id, ctx.decision_date))
     if not res.ok:
         return Checked(False, res.message(), targets, runs, res.errors)
 
@@ -174,6 +175,23 @@ def check(ctx: ResearchContext, raw: dict) -> Checked:
     return Checked(True, f"Decision ACCEPTED. Exposure: gross {e['gross']:.1%}, long {e['long']:.1%}, "
                          f"short {e['short']:.1%}. Orders execute at the next trading day's open.",
                    targets, runs)
+
+
+def held_removed_weights(conn, agent_id: str, d: str) -> dict[tuple[int, str], float]:
+    """{(slot, ticker): weight in the slot} for held tickers that have left
+    the S&P 500 (see universe.REMOVED), valued at d's close."""
+    from .. import universe
+    held = [p for p in ledger.positions(conn, agent_id) if p["ticker"] in universe.REMOVED and p["shares"]]
+    if not held:
+        return {}
+    val = ledger.value_agent(conn, agent_id, d, "close")
+    out = {}
+    for p in held:
+        eq = val.slot_equity.get(p["slot"], 0.0)
+        price = val.prices.get(p["ticker"])
+        if eq > 0 and price:
+            out[(p["slot"], p["ticker"])] = p["shares"] * price / eq
+    return out
 
 
 def targets_to_json(targets: list[SlotTarget]) -> str:
