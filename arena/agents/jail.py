@@ -1,7 +1,7 @@
 """Landlock jail for an agent CLI on Linux: it may read anything, but write
 only inside the folders it is given.
 
-    python -m arena.agents.jail --write DIR [--write DIR ...] -- COMMAND ARGS...
+    python -I arena/agents/jail.py --write DIR [--write DIR ...] -- COMMAND ARGS...
 
 Why: inside Docker, Codex's own read-only sandbox (bubblewrap) can't start,
 and without it Codex's apply_patch tool can write files - tested on the
@@ -103,7 +103,9 @@ def restrict_writes_to(paths: list[str]) -> None:
 
 def prefix(writable: list[str | os.PathLike]) -> list[str]:
     """argv prefix that runs a command inside the jail."""
-    out = [sys.executable, "-m", "arena.agents.jail"]
+    # By file path, isolated (-I): it works from any folder and imports only
+    # the standard library, never anything from the agent's scratch folder.
+    out = [sys.executable, "-I", os.path.abspath(__file__)]
     for p in writable:
         out += ["--write", str(p)]
     return out + ["--"]
@@ -115,7 +117,7 @@ def main(argv: list[str]) -> None:
         writable.append(argv[i + 1])
         i += 2
     if i >= len(argv) or argv[i] != "--" or i + 1 >= len(argv):
-        sys.exit("usage: python -m arena.agents.jail --write DIR ... -- COMMAND ...")
+        sys.exit("usage: python -I jail.py --write DIR ... -- COMMAND ...")
     cmd = argv[i + 1:]
     try:
         restrict_writes_to(writable)
