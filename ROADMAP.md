@@ -43,9 +43,9 @@ Protect the data and make the system survivable before adding features.
 - [x] **0.9 Health monitoring.** Uptime Kuma (or similar) watching the site, the bot heartbeat, and the Alpaca connection; VPS CPU/RAM/disk metrics.
   *Done when:* stopping the bot container triggers an alert.
   > Live (2026-10-10): the scheduler pings Healthchecks.io every 5 min (`/fail` on database/disk/Alpaca problems; a test `/fail` ping went through). UptimeRobot watches https://databasedstrategy.com every 5 min. Stop test passed: engine stopped 17:36 ET, Healthchecks.io went down at 17:48 (15 min after the last ping) and up at 17:53 when it restarted. CPU/RAM metrics not added.
-- [ ] **0.10 CI/CD.** GitHub Actions: lint + tests on push; on merge to `main`, deploy to the VPS (pull, rebuild, restart, health check, roll back on failure).
+- [x] **0.10 CI/CD.** GitHub Actions: lint + tests on push; on merge to `main`, deploy to the VPS (pull, rebuild, restart, health check, roll back on failure).
   *Done when:* a merged change reaches production with no manual SSH.
-  > Code done: `.github/workflows/ci.yml` (ruff + tests; deploy on main) and `scripts/deploy.sh` (waits for a quiet moment, rebuild, health check, automatic rollback, Telegram). Waiting for: the private GitHub repo, deploy keys and secrets (DEPLOY.md "GitHub and automatic deploys").
+  > Code done: `.github/workflows/ci.yml` (ruff + tests; deploy on main) and `scripts/deploy.sh` (waits for a quiet moment, rebuild, health check, automatic rollback, Telegram). Live (2026-10-10): private repo danielratz123-hub/ai-trading-league; the server pulls with a read-only deploy key; GitHub's key may only run `scripts/deploy.sh` (forced command). First automatic deploy of b74fbc8 reached production with no manual SSH. Production branch is now `main`.
 
 ---
 
