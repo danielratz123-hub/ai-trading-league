@@ -27,6 +27,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY arena ./arena
+COPY config ./config
 COPY scripts ./scripts
 
 # Run as an unprivileged user. APP_UID should be your own user id on the

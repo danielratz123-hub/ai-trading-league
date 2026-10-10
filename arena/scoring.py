@@ -40,9 +40,17 @@ def score_week(conn: sqlite3.Connection, week_no: int, exec_date: str,
 
     best = max(rets.values()) if rets else None
     winners = [a for a, r in rets.items() if math.isclose(r, best, rel_tol=0, abs_tol=1e-12)]
+    weekly = _learning_scores(conn, week_no, exec_date, marks, rets)
+    if weekly and next(iter(weekly.values()))["mode"] == "risk_adjusted":
+        # From scoring.start_week: the best risk-adjusted score wins the point.
+        from .learning.scores import winner as risk_winner
+        w = risk_winner(weekly)
+        winners = [w] if w else []
     for agent, r in rets.items():
         start = week_start_snapshot(conn, agent, exec_date)
         point = int(len(winners) == 1 and agent == winners[0])   # tie -> nobody
+        if weekly:
+            conn.execute("UPDATE weekly_scores SET point_won=? WHERE week_no=? AND agent_id=?", (point, week_no, agent))
         conn.execute(
             "INSERT OR REPLACE INTO scores(week_no, agent_id, weekly_return, point, start_equity, end_equity) "
             "VALUES (?,?,?,?,?,?)",
@@ -50,6 +58,16 @@ def score_week(conn: sqlite3.Connection, week_no: int, exec_date: str,
     conn.execute("UPDATE weeks SET status='scored' WHERE week_no=?", (week_no,))
     log_event(conn, "info", "scoring", f"week {week_no}: " + json.dumps({a: round(r, 6) for a, r in rets.items()}))
     return rets
+
+
+def _learning_scores(conn, week_no: int, exec_date: str, marks: dict[str, int],
+                     rets: dict[str, float]) -> dict[str, dict] | None:
+    """weekly_scores rows (learning layer on only). None = layer off."""
+    from .learning import config as lconfig
+    if not lconfig.enabled():
+        return None
+    from .learning.scores import compute
+    return compute(conn, week_no, exec_date, marks, rets)
 
 
 def _score_slots(conn, week_no, agent, start, end) -> None:
@@ -77,6 +95,11 @@ def maybe_award_bonus(conn: sqlite3.Connection, week_no: int, on_date: str) -> s
             (agent, *weeks)).fetchall()
         if len(rows) == n:
             period[agent] = math.prod(1 + r["weekly_return"] for r in rows) - 1
+    from .learning.scores import mode_for
+    if mode_for(weeks[0]) == "risk_adjusted":
+        # A whole period under the new rules: risk-adjusted period score.
+        from .learning.scores import period_scores
+        period = period_scores(conn, weeks)
     winner = None
     if len(period) >= 2:
         best = max(period.values())
@@ -87,6 +110,8 @@ def maybe_award_bonus(conn: sqlite3.Connection, week_no: int, on_date: str) -> s
     if winner:
         # Deposited after scoring, before this week's trades: it never counts as return.
         ledger.deposit(conn, winner, SETTINGS.bonus_amount, on_date, f"bonus weeks {weeks[0]}-{weeks[-1]}")
+        conn.execute("UPDATE weekly_scores SET bonus_added=? WHERE week_no=? AND agent_id=?",
+                     (SETTINGS.bonus_amount, week_no, winner))
     return winner
 
 

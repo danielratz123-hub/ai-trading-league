@@ -149,3 +149,4 @@ no longer supported.) Running on this PC with `start.cmd` still works for testin
 | `arena/scheduler.py` | Runs the jobs on US market time (DST, holidays, half days, catch-up) |
 | `arena/mirror.py` | Optional: copy the leader into the Alpaca paper account |
 | `Dockerfile`, `docker-compose.yml` | Engine + API containers (+ Caddy for HTTPS) |
+| `arena/learning/`, `config/learning.yaml` | The data, review and learning layer: see **[LEARNING.md](LEARNING.md)** |

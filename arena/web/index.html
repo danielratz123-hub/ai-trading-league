@@ -26,6 +26,7 @@
         <a href="#board">Leaderboard</a>
         <a href="#play">Strategies</a>
         <a href="#trades">Trades</a>
+        <a href="#learning" id="learning-link" hidden>Learning</a>
       </div>
       <div class="status" aria-live="polite">
         <span class="dot-wrap" aria-hidden="true"><span class="dot-ping" id="status-ping" hidden></span><span class="dot" id="status-dot"></span></span>
@@ -139,6 +140,71 @@
         </table>
       </div></div>
     </section>
+    <!-- 10. Learning layer: scores, regimes, reports, lessons, versions, challengers, limits -->
+    <section id="learning" class="wrap section" aria-labelledby="ln-h" hidden>
+      <div class="section-head">
+        <h2 id="ln-h">How they learn</h2>
+        <span class="sub" id="ln-sub"></span>
+      </div>
+
+      <h3 class="ln-h">Weekly scores</h3>
+      <div class="card table-card"><div class="scroll">
+        <table class="tbl" style="min-width:760px">
+          <thead><tr class="m">
+            <th class="pl">WEEK</th><th>AGENT</th><th>MODE</th><th class="r">RETURN</th><th class="r">MAX DRAWDOWN</th>
+            <th class="r">SCORE</th><th class="r">POINT</th><th class="r pr">BONUS</th>
+          </tr></thead>
+          <tbody id="ln-scores"></tbody>
+        </table>
+      </div></div>
+
+      <h3 class="ln-h">Which strategy earns most in which regime</h3>
+      <div class="card table-card"><div class="scroll">
+        <table class="tbl" style="min-width:640px">
+          <thead><tr class="m"><th class="pl">AGENT</th><th>STRATEGY</th><th>REGIME</th><th class="r">TRADES</th>
+            <th class="r">AVG 1-WEEK</th><th class="r pr">WIN RATE</th></tr></thead>
+          <tbody id="ln-regime"></tbody>
+        </table>
+      </div></div>
+
+      <h3 class="ln-h">Latest weekly reports</h3>
+      <div class="ln-grid" id="ln-reports"></div>
+
+      <h3 class="ln-h">Lessons</h3>
+      <div class="card table-card"><div class="scroll">
+        <table class="tbl" style="min-width:760px">
+          <thead><tr class="m"><th class="pl">AGENT</th><th>STATUS</th><th>LESSON</th><th>REGIME</th>
+            <th class="r">CONFIRMED</th><th class="pr">SOURCE</th></tr></thead>
+          <tbody id="ln-lessons"></tbody>
+        </table>
+      </div></div>
+
+      <h3 class="ln-h">Strategy versions</h3>
+      <div class="card table-card"><div class="scroll">
+        <table class="tbl" style="min-width:880px">
+          <thead><tr class="m"><th class="pl">WHEN</th><th>AGENT</th><th>STRATEGY</th><th>VERSION</th><th>ROLE</th>
+            <th>CHANGE</th><th class="pr">REASON</th></tr></thead>
+          <tbody id="ln-versions"></tbody>
+        </table>
+      </div></div>
+
+      <h3 class="ln-h">Champion vs challenger</h3>
+      <div class="card table-card"><div class="scroll">
+        <table class="tbl" style="min-width:820px">
+          <thead><tr class="m"><th class="pl">WEEK</th><th>AGENT</th><th>STRATEGY</th><th class="r">CHALLENGER</th>
+            <th class="r">CHAMPION</th><th>VERDICT</th><th class="pr">HYPOTHESIS</th></tr></thead>
+          <tbody id="ln-shadow"></tbody>
+        </table>
+      </div></div>
+
+      <h3 class="ln-h">Limits enforced (rejected changes)</h3>
+      <div class="card table-card"><div class="scroll">
+        <table class="tbl" style="min-width:820px">
+          <thead><tr class="m"><th class="pl">WHEN</th><th>AGENT</th><th>WHERE</th><th>WHAT</th><th class="pr">WHY REFUSED</th></tr></thead>
+          <tbody id="ln-rejected"></tbody>
+        </table>
+      </div></div>
+    </section>
   </main>
 
   <footer class="foot">
@@ -150,5 +216,6 @@
 
   <script src="live.js"></script>
   <script src="v3.js"></script>
+  <script src="learning.js"></script>
 </body>
 </html>

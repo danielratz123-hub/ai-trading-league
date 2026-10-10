@@ -1,0 +1,98 @@
+# The data, review and learning layer (arena/learning/). Every threshold
+# lives here; the code never hard-codes one. Read once per process, so after
+# editing: `docker compose up -d` (restarts the engine and api).
+#
+# Switched on with LEARNING_ENABLED=1 in .env. While it is off, the league
+# runs exactly as before (no new jobs, no new rules, no prompt changes).
+#
+# Keys marked "(added)" were not in the original spec; each says why.
+
+schedule:
+  timezone: America/New_York          # all market times are ET; zoneinfo handles DST
+  risk_check:                         # hourly during market hours
+    first: "10:00"
+    every_minutes: 60
+    last: "15:30"                     # also run at this time; on half days, last = close - 30 min
+  daily_review: "16:30"               # trading days only; also waits for the `daily` job (prices + snapshot)
+  weekly_review: "Saturday 12:00"     # the weekly decide then runs right after it (see LEARNING.md)
+  use_alpaca_calendar: true           # skip holidays / handle half days (the existing calendar table)
+
+risk:                                 # hourly check, plain code, no LLM
+  stop_loss_pct: 0.06                 # default; strategies may tune within param_ranges
+  gap_alert_pct: 0.05                 # position moves >5% since last check
+  vix_spike_pct: 0.20                 # VIX up >20% intraday
+  strategy_drawdown_limit: 0.10       # triggers emergency review
+  # (added) A rule that fired for a position wakes the agent at most once per
+  # trading day, so a stopped-out position that the agent chose to keep
+  # doesn't page it every hour.
+  refire_after_days: 1
+
+regime:
+  labels: [trend_up, trend_down, choppy, high_vol]
+  confirm_days: 2                     # regime must hold 2+ days before tilting
+  # (added) The thresholds of the documented rules in arena/learning/regime.py.
+  high_vol_vix: 30.0                  # VIX at or above this -> high_vol
+  high_vol_realized: 0.30             # or SPY 20-day realized vol (annualized) at or above this
+  sma_fast: 50
+  sma_slow: 200
+  realized_vol_days: 20
+
+param_ranges:                         # daily review may only move within these
+  stop_loss_pct: [0.03, 0.08]
+  position_max_pct: [0.05, 0.20]
+
+hard_limits:                          # anti-gambling, enforced in code, agents can NEVER change these
+  max_position_pct_of_strategy: 0.20  # no single stock above 20% of a strategy
+  max_gross_exposure: 1.0             # no leverage: total long+short <= strategy equity
+  max_short_exposure_pct: 0.30        # shorts capped at 30% of strategy equity
+  every_position_needs_stop: true     # no order without a stop-loss attached
+  max_trades_per_strategy_per_day: 5  # blocks overtrading / revenge trading
+  allowed_instruments: [us_stocks, us_etfs]   # no options, no leveraged/inverse ETFs, no crypto
+  min_price: 5.00                     # no penny stocks
+  min_avg_daily_volume: 1000000       # liquid names only (20-day average)
+  # (added) Monday's scheduled weekly rebalance replaces whole slots at once
+  # (a 5-stock slot changing all its names is 10 trades), so it doesn't count
+  # towards the daily trade cap; neither does a capital tilt (it scales every
+  # position of the strategies involved). Engine-forced exits (stops, forced covers)
+  # and reduce-only risk exits never count either: blocking a risk exit would
+  # add risk, not remove it.
+  trade_cap_includes_weekly_rebalance: false
+
+learning:
+  min_trades_for_rewrite: 5
+  lesson_confirmations_to_activate: 3
+  rewrites_per_agent_per_week: 1      # starting a brand-new strategy in an empty slot counts too
+  cooldown_weeks_after_change: 2
+  underperform_spy_weeks: 3
+  shadow_test_weeks: 1
+  # (added) A capital tilt may move at most this share of the agent's equity
+  # between strategies in one review, so a tilt can't become an all-in bet.
+  max_tilt_pct: 0.10
+  # (added) Lessons shown in a review prompt (active ones matching the regime).
+  max_lessons_in_prompt: 12
+
+scoring:
+  mode: risk_adjusted
+  # weekly score = weekly_return_pct / max(weekly_max_drawdown_pct, 1.0)
+  # (drawdown floor of 1% so a tiny drawdown can't blow the score up)
+  # A strategy/agent that broke a hard limit that week scores 0 for the week.
+  drawdown_floor_pct: 1.0
+  # (added) First week scored this way, and the first week whose decisions
+  # must follow the new hard limits. Weeks 1-4 finish under the original
+  # rules (raw return decides the point); week 5 starts the next 4-week
+  # bonus period, so no period mixes two rule sets.
+  start_week: 5
+
+# (added) Where the collector gets its data.
+market_data:
+  minute_bar_retention_days: 30       # older 1-minute bars are deleted (SQLite has no compression)
+  sector_etfs: [XLK, XLF, XLE, XLV, XLY, XLP, XLI, XLU, XLB, XLRE, XLC]
+  # Alpaca has no index data, so VIX comes from Cboe's free daily history
+  # (official close), and the intraday spike check watches VIXY (a VIX-futures
+  # ETF on Alpaca) scaled by this factor: VIXY moves roughly half as much as
+  # the VIX index intraday.
+  vix_daily_url: https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX_History.csv
+  vix_intraday_proxy: VIXY
+  vix_proxy_scale: 0.5
+  headlines: 10
+  watchlist_max: 20                   # tickers per agent beyond what it holds

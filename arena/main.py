@@ -40,6 +40,16 @@ League (times are US Eastern)
     reconcile        compare the Alpaca paper account with the league's records (alert on mismatch)
     heartbeat        send the daily "still alive" message
     mirror           show (or with --apply, place) the paper-account orders that copy the leader
+Learning layer (LEARNING_ENABLED=1 in .env; see LEARNING.md)
+    risk-check       the hourly risk check (wakes an agent only if a rule fires; --fake-agents: no model calls)
+    daily-review     after the close: market data, grader, then each agent's daily review
+    weekly-review    Saturday: grader, champion vs challenger, each agent's weekly review
+    grade            fill in outcomes for past decisions now
+    collect          fetch 1-minute bars once (the scheduler does this every minute)
+    learning-bootstrap  migrate the running league's state into the learning tables (once; --force to redo)
+    learning-status  strategies, lessons, recent reviews, rejected changes, risk checks
+    review-dry-run   a full daily + weekly review on a throwaway copy of the database: nothing is
+                     saved and no order is placed (--fake-agents: also no model calls)
 Tools
     tool             try a research tool by hand, e.g.
                      python -m arena.main tool screen --args "{\"conditions\": [\"rsi_14 < 30\"]}"
@@ -631,6 +641,123 @@ def cmd_tool(conn, args) -> None:
         ctx.close_session()
 
 
+# --------------------------------------------------------------------------
+# Learning layer
+# --------------------------------------------------------------------------
+
+def _runner(conn, args):
+    from .learning import jobs, review
+    if args.fake_agents:
+        return jobs.fake_runner
+    db_file = conn.execute("PRAGMA database_list").fetchone()["file"]
+    return review.default_runner(db_file or args.db)
+
+
+def _print_json(obj) -> None:
+    print(json.dumps(obj, indent=1, default=str))
+
+
+def _review_day(conn, args) -> str:
+    d = args.date or prices.latest_price_date(conn)
+    if d is None:
+        sys.exit("No prices in the database yet.")
+    return d
+
+
+def cmd_risk_check(conn, args) -> None:
+    from .learning import jobs
+    d = args.date or datetime.now(ET).date().isoformat()
+
+    def mirror_after(c, day):
+        _maybe_mirror(c, day, args)
+    _print_json(jobs.risk_check(conn, d, None if args.no_wake else _runner(conn, args), args.dry_run, mirror_after))
+
+
+def cmd_daily_review(conn, args) -> None:
+    from .learning import jobs
+    _print_json(jobs.daily_review(conn, _review_day(conn, args), _runner(conn, args), args.dry_run))
+
+
+def cmd_weekly_review(conn, args) -> None:
+    from .learning import jobs
+    _print_json(jobs.weekly_review(conn, args.date or datetime.now(ET).date().isoformat(), _runner(conn, args),
+                                   args.dry_run))
+
+
+def cmd_grade(conn, args) -> None:
+    from .learning import grader, jobs
+    jobs.ensure_bootstrap(conn)
+    _print_json(grader.grade_all(conn))
+
+
+def cmd_collect(conn, args) -> None:
+    from .learning import collector
+    source = prices.AlpacaPriceSource()
+    print(f"{collector.collect_minute(conn, source.minute_bars)} minute bars stored (feed {source.feed}).")
+
+
+def cmd_learning_bootstrap(conn, args) -> None:
+    from .learning import bootstrap
+    _print_json(bootstrap.run(conn, force=args.force))
+
+
+def cmd_learning_status(conn, args) -> None:
+    from .learning import config as lconfig, strategies as strat
+    print(f"LEARNING_ENABLED={'1' if lconfig.enabled() else '0'}; new rules + risk-adjusted scoring from week "
+          f"{lconfig.get().scoring.start_week}")
+    st = conn.execute("SELECT value FROM league_state WHERE key='learning_bootstrapped'").fetchone()
+    print(f"bootstrapped: {st[0] if st else 'no'}")
+    reg = conn.execute("SELECT day, regime FROM market_context WHERE kind='close' ORDER BY ts DESC LIMIT 1").fetchone()
+    print(f"regime: {reg['regime'] if reg else '-'} ({reg['day'] if reg else 'no market context yet'})")
+    bars = conn.execute("SELECT COUNT(*), MAX(ts) FROM bars_1m").fetchone()
+    print(f"1-minute bars: {bars[0]} (latest {bars[1] or '-'})")
+    for a in ledger.agent_ids(conn):
+        print(f"\n== {a} ==")
+        for s in strat.active(conn, a):
+            print(f"  slot {s.slot} {s.name!r} v{s.version} {json.dumps(s.params)}"
+                  + (" [challenger]" if s.challenger else "") + (" [EMERGENCY]" if s.emergency_flagged_at else ""))
+        n = conn.execute("SELECT status, COUNT(*) FROM lessons WHERE agent_id=? GROUP BY status", (a,)).fetchall()
+        print("  lessons: " + (", ".join(f"{r[0]} {r[1]}" for r in n) or "none"))
+        for r in conn.execute("SELECT kind, day, status, attempts FROM review_runs WHERE agent_id=? "
+                              "ORDER BY id DESC LIMIT 5", (a,)):
+            print(f"  review {r['kind']} {r['day']}: {r['status']} ({r['attempts']} attempt(s))")
+    rc = conn.execute("SELECT ts, positions, fired, woke FROM risk_checks ORDER BY id DESC LIMIT 3").fetchall()
+    print("\nrisk checks: " + ("; ".join(f"{r['ts']} {r['positions']} positions, {r['fired']} fired, woke {r['woke']}"
+                                          for r in rc) or "none yet"))
+    rj = conn.execute("SELECT ts, agent_id, source, kind, reason FROM rejected_changes ORDER BY id DESC LIMIT 5").fetchall()
+    print("rejected changes (latest): " + ("" if rj else "none"))
+    for r in rj:
+        print(f"  {r['ts']} {r['agent_id']} {r['source']} {r['kind']}: {r['reason'][:160]}")
+
+
+def cmd_review_dry_run(conn, args) -> None:
+    """A full daily + weekly review on the throwaway copy main() made."""
+    import os
+    from .learning import jobs
+    before = os.environ.get("LEARNING_ENABLED")
+    os.environ["LEARNING_ENABLED"] = "1"          # this command only, on the copy
+    try:
+        _review_dry_run(conn, args, jobs)
+    finally:
+        if before is None:
+            os.environ.pop("LEARNING_ENABLED", None)
+        else:
+            os.environ["LEARNING_ENABLED"] = before
+
+
+def _review_dry_run(conn, args, jobs) -> None:
+    d = conn.execute("SELECT MAX(date) FROM snapshots WHERE kind='daily'").fetchone()[0]
+    if d is None:
+        sys.exit("No daily snapshot yet: the league needs at least one processed trading day.")
+    runner = _runner(conn, args)
+    print(f"=== DRY RUN on a copy of the database: daily review for {d} ===")
+    _print_json(jobs.daily_review(conn, d, runner, dry_run=True))
+    print("\n=== DRY RUN: weekly review (as if today were the review day) ===")
+    _print_json(jobs.weekly_review(conn, datetime.now(ET).date().isoformat(), runner, dry_run=True))
+    print("\n=== What the database copy now holds ===")
+    cmd_learning_status(conn, args)
+
+
 COMMANDS = {
     "init-db": cmd_init_db,
     "update-calendar": cmd_update_calendar,
@@ -663,9 +790,17 @@ COMMANDS = {
     "test-alert": cmd_test_alert,
     "reconcile": cmd_reconcile,
     "heartbeat": cmd_heartbeat,          # handled in main() before the database is opened
+    "risk-check": cmd_risk_check,
+    "daily-review": cmd_daily_review,
+    "weekly-review": cmd_weekly_review,
+    "grade": cmd_grade,
+    "collect": cmd_collect,
+    "learning-bootstrap": cmd_learning_bootstrap,
+    "learning-status": cmd_learning_status,
+    "review-dry-run": cmd_review_dry_run,
 }
 READ_ONLY = {"status", "tool", "check-agents", "init-db", "serve", "scheduler", "app", "hash-password",
-             "backup", "backups", "restore-backup", "test-alert", "check-logins", "health"}
+             "backup", "backups", "restore-backup", "test-alert", "check-logins", "health", "learning-status"}
 
 
 def _throwaway_copy(db: str, workdir: str) -> str:
@@ -708,8 +843,13 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--to", help="restore-backup: where to write the restored database")
     parser.add_argument("--reason", help="check-logins: shown in the alert (e.g. 'before decide')")
     parser.add_argument("--scheduler", action="store_true", help="health: also check the scheduler heartbeat")
+    parser.add_argument("--fake-agents", action="store_true",
+                        help="review commands: answer 'hold' without calling any model (no plan usage)")
+    parser.add_argument("--no-wake", action="store_true", help="risk-check: only log, never wake an agent")
     parser.add_argument("--db", default=str(SETTINGS.db_path), help="database path")
     args = parser.parse_args(argv)
+    if args.command == "review-dry-run":
+        args.dry_run = True                 # always on a throwaway copy
     import os
     os.environ.setdefault("ARENA_DB", str(Path(args.db).resolve()))   # where alerts keep their state
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")

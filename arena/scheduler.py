@@ -10,6 +10,12 @@
     heartbeat every day at 18:00: a "still alive" Telegram message
     reports   trading days from 10:15, once execute has succeeded (weekly strategy reports)
 
+With LEARNING_ENABLED=1 (arena/learning, times from config/learning.yaml):
+    risk-check     trading days, hourly 10:00-15:30 (each within 30 minutes of its time, never replayed later)
+    daily-review   trading days at 16:30, once that day's `daily` has succeeded
+    weekly-review  Saturday 12:00; `decide` then waits for it (or for 4 hours, if it keeps failing)
+    + the 1-minute bar collector, a thread inside this process (not a job)
+
     python -m arena.main scheduler
 
 Times are computed in America/New_York with zoneinfo, so daylight saving is
@@ -55,7 +61,45 @@ CATCH_UP_DAYS = 4                    # don't replay days older than this after d
 MAX_ATTEMPTS = 3
 RETRY_AFTER = timedelta(minutes=30)
 TIMEOUTS = {"decide": 3 * 3600, "execute": 1800, "daily": 3600, "update-calendar": 600,
-            "backup": 1800, "check-logins": 1200, "reports": 3600, "reconcile": 600, "heartbeat": 300}
+            "backup": 1800, "check-logins": 1200, "reports": 3600, "reconcile": 600, "heartbeat": 300,
+            "risk-check": 1800, "daily-review": 3600, "weekly-review": 3600}
+RISK_CHECK_WINDOW = timedelta(minutes=30)   # a risk check later than this is skipped, not replayed
+WEEKLY_REVIEW_GRACE = timedelta(hours=4)    # decide stops waiting for a failing weekly review
+
+
+@dataclass(frozen=True)
+class LearningTimes:
+    """The learning layer's schedule (config/learning.yaml), or None when it's off."""
+    risk_first: tuple[int, int]
+    risk_every_minutes: int
+    risk_last: tuple[int, int]
+    daily_review: tuple[int, int]
+    weekly_weekday: int                 # Monday = 0
+    weekly_review: tuple[int, int]
+
+    def risk_times(self, close_hm: tuple[int, int]) -> list[tuple[int, int]]:
+        limit = min(self.risk_last[0] * 60 + self.risk_last[1], close_hm[0] * 60 + close_hm[1] - 30)
+        first = self.risk_first[0] * 60 + self.risk_first[1]
+        out = list(range(first, limit + 1, self.risk_every_minutes))
+        if limit >= first and limit not in out:
+            out.append(limit)
+        return [(m // 60, m % 60) for m in out]
+
+    def review_at(self, week_end: str) -> datetime:
+        """The weekly review after a week that ended on week_end."""
+        d = date.fromisoformat(week_end) + timedelta(days=1)
+        while d.weekday() != self.weekly_weekday:
+            d += timedelta(days=1)
+        return _at(d.isoformat(), self.weekly_review)
+
+
+def learning_times() -> LearningTimes | None:
+    from .learning import config as lconfig
+    if not lconfig.enabled():
+        return None
+    s = lconfig.get().schedule
+    return LearningTimes(s.risk_first, s.risk_every_minutes, s.risk_last, s.daily_review,
+                         s.weekly_review_weekday, s.weekly_review)
 
 
 
@@ -86,11 +130,12 @@ def _close(d: str, calendar: dict[str, str]) -> datetime:
 
 
 def due_jobs(now: datetime, calendar: dict[str, str], history: dict[tuple[str, str], list[dict]],
-             league_started: bool) -> list[Job]:
+             league_started: bool, learning: LearningTimes | None = None) -> list[Job]:
     """Jobs that should run now, in the order to run them.
 
     calendar: trading day -> close time "HH:MM" (Eastern)
     history:  (job, key) -> previous runs [{"exit_code": int|None, "started_at": datetime}]
+    learning: the learning layer's times, or None when it is off
     """
     now = now.astimezone(ET)
     today = now.date().isoformat()
@@ -132,8 +177,16 @@ def due_jobs(now: datetime, calendar: dict[str, str], history: dict[tuple[str, s
     if today in calendar:
         if _at(today, EXECUTE_AT) <= now < _close(today, calendar):
             add("execute", today)
+        if learning:
+            close_hm = tuple(map(int, calendar[today].split(":")))
+            for hm in learning.risk_times(close_hm):
+                if _at(today, hm) <= now < _at(today, hm) + RISK_CHECK_WINDOW:
+                    add("risk-check", today, f"risk-{today}-{hm[0]:02d}{hm[1]:02d}")
         if now >= _close(today, calendar) + DAILY_AFTER_CLOSE:
             add("daily", today)
+        daily_ok = any(r["exit_code"] == 0 for r in history.get(("daily", today), []))
+        if learning and daily_ok and now >= _at(today, learning.daily_review):
+            add("daily-review", today, f"daily-review-{today}")
 
     # decide: for the most recent completed week, between the morning after
     # its last trading day and the next trading day's open.
@@ -144,7 +197,20 @@ def due_jobs(now: datetime, calendar: dict[str, str], history: dict[tuple[str, s
         end = _at(nxt, (9, 30)) if nxt else start + timedelta(days=3)
         if start - PRE_DECIDE_CHECK <= now < start:
             add("check-logins", None, f"pre-decide-{week_end}")
-        if start <= now < end:
+        if learning:
+            # The weekly review runs first; decide follows once it succeeded,
+            # gave up, or has been failing for WEEKLY_REVIEW_GRACE.
+            review_at = learning.review_at(week_end)
+            key = f"weekly-review-{week_end}"
+            if review_at <= now < end:
+                add("weekly-review", review_at.date().isoformat(), key)
+            runs = history.get(("weekly-review", key), [])
+            finished = (any(r["exit_code"] == 0 for r in runs)
+                        or sum(1 for r in runs if r["exit_code"] != TEMPFAIL) >= MAX_ATTEMPTS
+                        or now >= review_at + WEEKLY_REVIEW_GRACE)
+            if finished and start <= now < end:
+                add("decide", week_end)
+        elif start <= now < end:
             add("decide", week_end)
 
     # Strategy reports: after a successful execute (which scores the week).
@@ -259,6 +325,38 @@ def _check_disk(db_path) -> None:
         log.exception("disk check failed")
 
 
+def _market_open(conn, now: datetime) -> bool:
+    row = conn.execute("SELECT open_time, close_time FROM calendar WHERE date=?", (now.date().isoformat(),)).fetchone()
+    if row is None:
+        return False
+    hm = now.strftime("%H:%M")
+    return row["open_time"] <= hm <= row["close_time"]
+
+
+def _collector_loop(db_path, stop: threading.Event) -> None:
+    """Every minute while the market is open: 1-minute bars (learning layer).
+    Its own connection; a failure is logged (alert at most hourly) and the
+    next minute simply tries again, catching up the gap."""
+    from . import alerts
+    from .learning.collector import collect_minute
+    from .prices import AlpacaPriceSource
+    conn = connect(db_path)
+    source = None
+    while not stop.is_set():
+        now = datetime.now(ET)
+        if _market_open(conn, now):
+            try:
+                source = source or AlpacaPriceSource()
+                collect_minute(conn, source.minute_bars)
+            except Exception as e:  # noqa: BLE001
+                log.warning("collector: %s: %s", type(e).__name__, e)
+                alerts.send(f"1-minute collector failing: {type(e).__name__}: {str(e)[:300]}", level="warning",
+                            key="collector", every=timedelta(hours=1))
+        # Wake 5 seconds into the next minute (the bar just closed).
+        stop.wait(max(5.0, 65 - datetime.now(ET).second))
+    conn.close()
+
+
 class AlreadyRunning(RuntimeError):
     pass
 
@@ -342,12 +440,22 @@ def run_forever(db_path: str | Path = SETTINGS.db_path, tick_seconds: int = 30) 
                 f"the server or container restarted; missed jobs are caught up automatically.",
                 level="info", key="scheduler-start", every=timedelta(minutes=10))
     last_disk_check = datetime.min.replace(tzinfo=ET)
+    learning = None
+    try:
+        learning = learning_times()
+    except Exception:  # noqa: BLE001 - a broken learning config must not stop the league
+        log.exception("learning layer config error; its jobs are OFF until it is fixed")
+        alerts.send("Learning layer: config/learning.yaml could not be read; its jobs are off. The league runs "
+                    "as before.", level="error", key="learning-config", every=timedelta(hours=6))
+    if learning:
+        threading.Thread(target=_collector_loop, args=(db_path, _STOP), name="collector", daemon=True).start()
+        log.info("learning layer on: risk checks, daily/weekly reviews and the 1-minute collector")
     while not _STOP.is_set() and not _parent_gone():
         if datetime.now(ET) - last_disk_check >= DISK_CHECK_EVERY:
             _check_disk(db_path)
             last_disk_check = datetime.now(ET)
         started = conn.execute("SELECT 1 FROM agents LIMIT 1").fetchone() is not None
-        for job in due_jobs(datetime.now(ET), _calendar(conn), _history(conn), started):
+        for job in due_jobs(datetime.now(ET), _calendar(conn), _history(conn), started, learning):
             if _STOP.is_set():
                 break
             run_job(conn, job, log_dir, Path(db_path).resolve())

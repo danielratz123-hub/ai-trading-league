@@ -251,3 +251,19 @@ h2 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
   .lift:hover { transform: none; }
   html { scroll-behavior: auto; }
 }
+
+/* Learning section (learning.js) */
+.ln-h { margin: 36px 0 12px; font-size: 17px; font-weight: 600; color: var(--ink-2); }
+.ln-h:first-of-type { margin-top: 8px; }
+.ln-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.ln-report { padding: 20px 22px; }
+.ln-report h4 { margin: 0 0 4px; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+.ln-report .m { font-size: 11px; color: var(--faint); letter-spacing: 0.06em; }
+.ln-report dl { margin: 12px 0 0; display: grid; gap: 10px; }
+.ln-report dt { font-size: 11px; letter-spacing: 0.08em; color: var(--faint); text-transform: uppercase; }
+.ln-report dd { margin: 2px 0 0; font-size: 13.5px; color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.ln-pill { font-size: 10.5px; letter-spacing: 0.06em; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.ln-pill.active, .ln-pill.promoted, .ln-pill.champion { color: var(--up); border-color: rgba(76,195,138,.35); }
+.ln-pill.dropped, .ln-pill.retired { color: var(--down); border-color: rgba(242,112,122,.35); }
+.ln-pill.challenger, .ln-pill.pending, .ln-pill.candidate { color: var(--warn); border-color: rgba(245,196,107,.35); }
+.ln-wrap { white-space: normal; overflow-wrap: anywhere; max-width: 520px; color: var(--ink-2); font-size: 13.5px; }

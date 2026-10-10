@@ -286,12 +286,16 @@ class RebalanceResult:
 
 
 def rebalance(conn: sqlite3.Connection, agent_id: str, d: str, targets: list[SlotTarget],
-              reason: str = "rebalance") -> RebalanceResult:
+              reason: str = "rebalance", order_check=None) -> RebalanceResult:
     """Move the agent to the target portfolio at date d's open prices.
 
     Must only be called with targets that risk.validate_portfolio accepted.
     Slots not listed in `targets` are closed and their money returns to the
     reserve (slot 0).
+
+    order_check(slot, ticker, shares, price) -> bool, if given, is asked
+    before every fill (the learning layer's hard limits); a refused order is
+    skipped.
     """
     with transaction(conn):
         val = value_agent(conn, agent_id, d, "open")
@@ -357,6 +361,9 @@ def rebalance(conn: sqlite3.Connection, agent_id: str, d: str, targets: list[Slo
             # Cap buys that add long exposure; covering a short must always complete.
             if delta > 0 and position_shares(conn, agent_id, s, ticker) >= 0:
                 delta = affordable(conn, agent_id, s, delta, price)
+            if order_check is not None and abs(delta) >= DUST and not order_check(s, ticker, delta, price):
+                skipped.append(f"{ticker} (slot {s}): order refused by a hard limit")
+                continue
             tr = execute_trade(conn, agent_id, s, ticker, delta, d, price, reason,
                                trade_note(by_slot.get(s), ticker, exits))
             if tr:

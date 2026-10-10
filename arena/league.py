@@ -317,6 +317,8 @@ def _run_agent_turn(conn, adapter: AgentAdapter, week_no: int, decision_date: st
                     "INSERT INTO pending_orders(agent_id, created_date, exec_date, kind, payload, note) "
                     "VALUES (?,?,?,'rebalance',?,?)",
                     (agent_id, decision_date, exec_date, targets_to_json(out.accepted.targets), f"week {week_no}"))
+                _journal_decision(conn, agent_id, week_no, decision_date, exec_date, out.decision,
+                                  out.accepted.targets, brief.system_prompt(agent_id) + "\n\n" + briefing, simulate)
             conn.execute(
                 "UPDATE agent_turns SET status=?, error=?, decision_json=?, attempts=?, tool_calls=?, "
                 "web_searches=?, model_calls=?, input_tokens=?, cached_tokens=?, cache_write_tokens=?, "
@@ -333,6 +335,25 @@ def _run_agent_turn(conn, adapter: AgentAdapter, week_no: int, decision_date: st
                 rejected=max(0, out.attempts - (1 if ok else 0)), last_errors=[], simulate=simulate)
     return TurnReport(agent_id, status, out.cost_usd, out.tool_calls, out.web_searches, out.attempts,
                       out.error, out.accepted.message if out.accepted else "")
+
+
+def _journal_decision(conn, agent_id: str, week_no: int, decision_date: str, exec_date: str, decision: dict,
+                      targets, prompt: str, simulate: bool) -> None:
+    """The learning layer's journal of an accepted weekly decision. Its own
+    savepoint: a bug there is logged and alerted, but never costs the agent
+    its accepted decision."""
+    from .learning import config as lconfig
+    if simulate or not lconfig.enabled():
+        return
+    try:
+        from .learning.decide import after_accepted
+        with transaction(conn):
+            after_accepted(conn, agent_id, week_no, decision_date, exec_date, decision, targets, prompt)
+    except Exception as e:  # noqa: BLE001
+        log_event(conn, "error", f"learning:{agent_id}", f"week {week_no}: journaling the decision failed: "
+                  f"{type(e).__name__}: {e}")
+        alerts.send(f"Learning layer: journaling {agent_id}'s week {week_no} decision failed ({type(e).__name__}: "
+                    f"{str(e)[:300]}). The decision itself was accepted and will trade.", level="warning")
 
 
 CLI_NOTE = ("Your research tools and submit_decision come from the MCP server named \"arena\" (your "
@@ -421,6 +442,8 @@ def _run_cli_turn(conn, agent: CliAgent, week_no: int, decision_date: str, exec_
             conn.execute("INSERT INTO pending_orders(agent_id, created_date, exec_date, kind, payload, note) "
                          "VALUES (?,?,?,'rebalance',?,?)",
                          (agent_id, decision_date, exec_date, state["targets"], f"week {week_no}"))
+            _journal_decision(conn, agent_id, week_no, decision_date, exec_date, state["decision"],
+                              targets_from_json(state["targets"]), prompt, simulate)
         conn.execute(
             "UPDATE agent_turns SET status=?, error=?, decision_json=?, attempts=?, tool_calls=?, "
             "web_searches=?, model_calls=?, input_tokens=?, cached_tokens=?, cache_write_tokens=?, "
@@ -488,16 +511,37 @@ def execute(conn: sqlite3.Connection) -> ExecReport:
             orders = conn.execute("SELECT * FROM pending_orders WHERE agent_id=? AND kind='rebalance' "
                                   "AND status='pending' AND exec_date=?", (a, d)).fetchall()
             n = 0
+            seq0 = conn.execute("SELECT COALESCE(MAX(seq), 0) FROM trades").fetchone()[0]
             for o in orders:
-                res = ledger.rebalance(conn, a, d, targets_from_json(o["payload"]))
+                targets = targets_from_json(o["payload"])
+                res = ledger.rebalance(conn, a, d, targets, order_check=_order_check(conn, a, d, targets, week["week_no"]))
                 n += len(res.trades)
                 note = "; ".join(res.skipped) or None
                 conn.execute("UPDATE pending_orders SET status='done', note=COALESCE(?, note) WHERE id=?",
                              (note, o["id"]))
             trades[a] = n
+            _link_trades(conn, a, d, week["week_no"], seq0)
             ledger.snapshot(conn, a, d, "post_trade", "open")
         conn.execute("UPDATE weeks SET status='executed' WHERE week_no=?", (week["week_no"],))
     return ExecReport(week["week_no"], d, scored, rets, winner, trades)
+
+
+def _order_check(conn, agent_id: str, d: str, targets, week_no: int):
+    """The learning layer's per-order hard-limit check, from scoring.start_week (else None)."""
+    from .learning import hardlimits
+    if not hardlimits.active(conn, week_no):
+        return None
+    from .learning.execution import order_check
+    equity = ledger.value_agent(conn, agent_id, d, "open").equity
+    return order_check(conn, agent_id, d, targets, equity, "rebalance", "weekly")
+
+
+def _link_trades(conn, agent_id: str, d: str, week_no: int, after_seq: int) -> None:
+    from .learning import config as lconfig
+    if not lconfig.enabled():
+        return
+    from .learning.journal import link_trades
+    link_trades(conn, agent_id, d, "weekly_rebalance", week_no, after_seq)
 
 
 def tickers_needed_at_open(conn: sqlite3.Connection, d: str) -> list[str]:
@@ -510,6 +554,9 @@ def tickers_needed_at_open(conn: sqlite3.Connection, d: str) -> list[str]:
                                    "AND kind='rebalance' AND exec_date<=?", (d,)):
         for t in targets_from_json(payload):
             tickers |= set(t.weights)
+    for (payload,) in conn.execute("SELECT payload FROM pending_orders WHERE status='pending' "
+                                   "AND kind='emergency' AND exec_date<=?", (d,)):
+        tickers |= set(json.loads(payload).get("positions") or {})     # learning layer: new positions
     return sorted(tickers)
 
 
@@ -554,12 +601,25 @@ def run_open(conn: sqlite3.Connection, d: str) -> OpenReport:
     if week:
         before = {a: _count_risk_fills(conn, a) for a in ledger.agent_ids(conn)}
         rep = execute(conn)
+        _learning_open(conn, d, weekly_executed=True)
         return OpenReport(rep, {a: _count_risk_fills(conn, a) - n for a, n in before.items()})
     fills = {}
     with transaction(conn):
         for a in ledger.agent_ids(conn):
             fills[a] = len(risk.execute_pending(conn, a, d))
+    _learning_open(conn, d, weekly_executed=False)
     return OpenReport(None, fills)
+
+
+def _learning_open(conn, d: str, weekly_executed: bool) -> dict[str, int]:
+    """Capital tilts / emergency rewrites from the daily review, at this open.
+    (On a weekly execution day they are superseded by the rebalance.)"""
+    from .learning import config as lconfig
+    if not lconfig.enabled() or is_paused(conn):
+        return {}
+    from .learning.execution import run_open as learning_run_open
+    with transaction(conn):
+        return learning_run_open(conn, d, weekly_executed)
 
 
 def _decided_after_open(conn, week_no: int, d: str) -> bool:

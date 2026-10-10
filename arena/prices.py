@@ -133,6 +133,10 @@ class AlpacaPriceSource:
                 frames.append(raw.reset_index().sort_values("timestamp"))
         return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=["symbol", "timestamp", "open", "close"])
 
+    def minute_bars(self, tickers: list[str], start: datetime, end: datetime) -> pd.DataFrame:
+        """1-minute bars (the collector): symbol, timestamp, open, high, low, close, volume, vwap."""
+        return self._minute_bars(tickers, start, end)
+
     def fetch_opens(self, tickers: list[str], d: str) -> pd.DataFrame:
         """Opening price of each ticker on day d: the open of its first
         1-minute bar between 9:30 and 9:45 ET. Columns: ticker, open."""

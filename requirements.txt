@@ -3,6 +3,7 @@ pandas==3.0.6
 numpy==2.5.3
 alpaca-py==0.44.0
 python-dotenv==1.2.4
+PyYAML==6.0.3
 fastapi==0.142.4
 python-multipart==0.0.32
 uvicorn==0.54.0

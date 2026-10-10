@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from .. import health, league, ledger
 from ..config import SETTINGS
 from ..db import connect
-from . import auth, control, live, queries, v3
+from . import auth, control, learning, live, queries, v3
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
@@ -202,6 +202,10 @@ def create_app() -> FastAPI:
     @app.get("/api/costs")
     def costs(conn=Depends(read_conn)):
         return queries.costs(conn)
+
+    @app.get("/api/learning")
+    def learning_overview(conn=Depends(read_conn)):
+        return learning.overview(conn)
 
     @app.post("/api/admin/pause", dependencies=[Depends(require_admin)])
     def pause():

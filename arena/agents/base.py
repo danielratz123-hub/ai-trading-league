@@ -126,7 +126,8 @@ def run_turn(adapter: AgentAdapter, toolbox: ToolBox, system: str, briefing: str
     budget = toolbox.budget
     out = TurnOutcome(None, None, None, 0)
     hard_limit = budget.max_spend_usd * SETTINGS.hard_spend_multiplier
-    tools = toolbox.specs() + [SUBMIT_SPEC]
+    from .decision import submit_spec
+    tools = toolbox.specs() + [submit_spec()]
     adapter.start(system, briefing, tools, toolbox.web_search_enabled, budget.max_calls)
     log("system", system)
     log("user", briefing)

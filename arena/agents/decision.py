@@ -70,6 +70,12 @@ SUBMIT_SPEC = {
 }
 
 
+def submit_spec() -> dict:
+    """The submit_decision schema in force (the learning layer adds fields when on)."""
+    from ..learning.decide import submit_spec as extended
+    return extended(SUBMIT_SPEC)
+
+
 @dataclass
 class Checked:
     ok: bool
@@ -184,8 +190,15 @@ def check(ctx: ResearchContext, raw: dict) -> Checked:
                 last_prices[ticker] = p[1]
     res = risk.validate_portfolio(targets, last_prices,
                                   reduce_only=held_removed_weights(conn, ctx.agent_id, ctx.decision_date))
+    # The learning layer's rules (strategy params, hard limits); a no-op while it is off.
+    # Reported together with the limits above, so one retry can fix everything.
+    from ..learning import decide as learning_decide
+    extra = learning_decide.check(conn, ctx.agent_id, ctx.decision_date, raw, targets)
     if not res.ok:
-        return Checked(False, res.message(), targets, runs, res.errors)
+        msg = res.message() + "".join(f"\n  - {e}" for e in extra)
+        return Checked(False, msg, targets, runs, res.errors + extra)
+    if extra:
+        return _rejected(extra, targets, runs)
 
     e = res.exposures
     return Checked(True, f"Decision ACCEPTED. Exposure: gross {e['gross']:.1%}, long {e['long']:.1%}, "

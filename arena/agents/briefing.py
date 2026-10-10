@@ -188,6 +188,10 @@ def build(conn: sqlite3.Connection, agent_id: str, week_no: int, decision_date: 
     from ..reports import briefing_section
     lines += briefing_section(conn, agent_id, week_no)
 
+    # Learning layer: strategies, rules, lessons (empty while it is off) --
+    from ..learning.decide import briefing_section as learning_section
+    lines += learning_section(conn, agent_id, week_no, decision_date)
+
     # Universe changes ---------------------------------------------------
     from .. import universe
     info = universe.list_info(conn)

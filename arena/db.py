@@ -408,6 +408,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(trades)")}
     if "note" not in cols:
         conn.execute("ALTER TABLE trades ADD COLUMN note TEXT")
+    from .learning import schema as learning_schema
+    learning_schema.migrate(conn)
 
 
 _savepoint_id = 0

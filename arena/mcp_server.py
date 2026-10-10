@@ -59,7 +59,8 @@ class TurnServer:
         self.ctx = ResearchContext(self.conn, args.agent, args.date, simulate=args.simulate)
         # API spend isn't metered here (subscription CLIs); tool calls are.
         self.toolbox = ToolBox(self.ctx, Budget(max_calls=SETTINGS.max_tool_calls, max_spend_usd=float("inf")))
-        self.specs = TOOL_SPECS + [SUBMIT_SPEC]
+        from .agents.decision import submit_spec
+        self.specs = TOOL_SPECS + [submit_spec()]
         self._save()
 
     def _save(self) -> None:
@@ -200,6 +201,51 @@ class ReportServer:
         self.conn.close()
 
 
+class ReviewServer:
+    """The learning layer's review turns (daily / weekly / risk): ONE tool,
+    submit_review. No research tools and no database access: everything the
+    agent may see is already in its prompt. The output's structure is
+    validated here (one retry); the engine applies it after the CLI exits."""
+
+    MAX_ATTEMPTS = 2
+
+    def __init__(self, args):
+        from .learning import review
+        self.review, self.kind = review, args.review
+        self.inp = json.loads(Path(args.review_input).read_text(encoding="utf-8"))
+        self.result_path = Path(args.result)
+        self.state = {"accepted": False, "output": None, "attempts": 0, "last_errors": []}
+        self.specs = [review.SPECS[self.kind]]
+        self._save()
+
+    _save = TurnServer._save
+    list_tools = TurnServer.list_tools
+
+    def call(self, name: str, arguments: dict) -> tuple[str, bool]:
+        if name != "submit_review":
+            return f"Unknown tool {name!r}: only submit_review is available.", True
+        s = self.state
+        if s["accepted"]:
+            return "Ignored: your review was already accepted.", True
+        if s["attempts"] >= self.MAX_ATTEMPTS:
+            return "No retries left: the engine falls back to 'hold'.", True
+        s["attempts"] += 1
+        errors = self.review.validate_output(self.kind, arguments, self.inp)
+        s["last_errors"] = errors
+        if errors:
+            self._save()
+            left = self.MAX_ATTEMPTS - s["attempts"]
+            tail = ("Fix it and call submit_review again (last try)." if left else
+                    "No retries left: the engine falls back to 'hold'.")
+            return "REJECTED:\n- " + "\n- ".join(errors) + "\n" + tail, True
+        s.update(accepted=True, output=arguments)
+        self._save()
+        return "Review ACCEPTED. The engine applies it and logs anything a limit refuses. You can stop now.", False
+
+    def close(self) -> None:
+        pass
+
+
 def handle(server: TurnServer, msg: dict) -> dict | None:
     """One JSON-RPC message in, one reply out (None for notifications)."""
     method, msg_id, params = msg.get("method"), msg.get("id"), msg.get("params") or {}
@@ -310,6 +356,8 @@ def main() -> None:
     p.add_argument("--probe", action="store_true", help="expose only a 'ping' tool (check-agents)")
     p.add_argument("--report", action="store_true", help="the weekly report turn (read-only tools)")
     p.add_argument("--http", action="store_true", help="serve on 127.0.0.1 over HTTP (token in ARENA_MCP_TOKEN)")
+    p.add_argument("--review", choices=["daily", "weekly", "risk"], help="a learning-layer review turn")
+    p.add_argument("--review-input", help="--review: the review's input JSON file")
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 
@@ -317,7 +365,7 @@ def main() -> None:
     # corrupt it, so send stray prints to stderr.
     protocol_out = sys.stdout
     sys.stdout = sys.stderr
-    server = ReportServer(args) if args.report else TurnServer(args)
+    server = (ReviewServer(args) if args.review else ReportServer(args) if args.report else TurnServer(args))
     try:
         if args.http:
             import os
