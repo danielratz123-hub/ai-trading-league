@@ -39,6 +39,7 @@ League (times are US Eastern)
     test-alert       send a test Telegram alert
     reconcile        compare the Alpaca paper account with the league's records (alert on mismatch)
     heartbeat        send the daily "still alive" message
+    morning-report   08:00 ET Telegram status: yesterday's profit/loss (Mon-Fri), the week's (Saturday)
     mirror           show (or with --apply, place) the paper-account orders that copy the leader
 Learning layer (LEARNING_ENABLED=1 in .env; see LEARNING.md)
     risk-check       the hourly risk check (wakes an agent only if a rule fires; --fake-agents: no model calls)
@@ -66,7 +67,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from . import league, ledger, prices, scoring, trading_calendar
@@ -614,6 +615,26 @@ def cmd_heartbeat(conn, args) -> None:
     print("(sent to Telegram)" if sent else "(Telegram not configured: logged only)")
 
 
+def cmd_morning_report(conn, args) -> None:
+    """08:00 ET Telegram status: the last trading day (Mon-Fri), the week (Saturday)."""
+    from . import alerts, summary
+    day = date.fromisoformat(args.date) if args.date else datetime.now(ET).date()
+    if day.weekday() == 6:
+        print("Sunday: no report (no new prices since Saturday's weekly status).")
+        return
+    upto = (day - timedelta(days=1)).isoformat()      # the report covers closes before this morning
+    text = summary.weekly(conn, upto) if day.weekday() == 5 else summary.daily(conn, upto)
+    if not text:
+        print("Nothing to report yet (no closing snapshot).")
+        return
+    print(text)
+    if args.dry_run:
+        print("(dry run: not sent)")
+        return
+    sent = alerts.send(text, level="info")
+    print("(sent to Telegram)" if sent else "(Telegram not configured: logged only)")
+
+
 def cmd_test_alert(conn, args) -> None:
     from . import alerts
     if not alerts.configured():
@@ -790,6 +811,7 @@ COMMANDS = {
     "test-alert": cmd_test_alert,
     "reconcile": cmd_reconcile,
     "heartbeat": cmd_heartbeat,          # handled in main() before the database is opened
+    "morning-report": cmd_morning_report,
     "risk-check": cmd_risk_check,
     "daily-review": cmd_daily_review,
     "weekly-review": cmd_weekly_review,

@@ -8,6 +8,7 @@
     backup    every day at 17:30 (after daily)
     reconcile trading days at 17:00: Alpaca paper account vs the league's records
     heartbeat every day at 18:00: a "still alive" Telegram message
+    morning-report  Mon-Sat at 08:00: profit/loss status (the week's on Saturday)
     reports   trading days from 10:15, once execute has succeeded (weekly strategy reports)
 
 With LEARNING_ENABLED=1 (arena/learning, times from config/learning.yaml):
@@ -54,6 +55,8 @@ BACKUP_AT = (17, 30)                 # daily, after the daily job (16:45)
 REPORTS_AT = (10, 15)                # after execute (09:50) has scored the week
 RECONCILE_AT = (17, 0)               # trading days, after the close
 HEARTBEAT_AT = (18, 0)               # daily "still alive" message
+MORNING_REPORT_AT = (8, 0)           # Telegram status: the last day (Mon-Fri), the week (Saturday)
+MORNING_REPORT_LATEST = (12, 0)      # not sent after this (a late "morning" report is just noise)
 DISK_CHECK_EVERY = timedelta(hours=1)
 PRE_DECIDE_CHECK = timedelta(hours=2)
 TEMPFAIL = 75                        # "retry until fixed" (a login problem at decide)
@@ -61,7 +64,7 @@ CATCH_UP_DAYS = 4                    # don't replay days older than this after d
 MAX_ATTEMPTS = 3
 RETRY_AFTER = timedelta(minutes=30)
 TIMEOUTS = {"decide": 3 * 3600, "execute": 1800, "daily": 3600, "update-calendar": 600,
-            "backup": 1800, "check-logins": 1200, "reports": 3600, "reconcile": 600, "heartbeat": 300,
+            "backup": 1800, "check-logins": 1200, "reports": 3600, "reconcile": 600, "heartbeat": 300, "morning-report": 300,
             "risk-check": 1800, "daily-review": 3600, "weekly-review": 3600}
 RISK_CHECK_WINDOW = timedelta(minutes=30)   # a risk check later than this is skipped, not replayed
 WEEKLY_REVIEW_GRACE = timedelta(hours=4)    # decide stops waiting for a failing weekly review
@@ -227,6 +230,9 @@ def due_jobs(now: datetime, calendar: dict[str, str], history: dict[tuple[str, s
     # "Still alive": if this message doesn't arrive, something is wrong.
     if now >= _at(today, HEARTBEAT_AT):
         add("heartbeat", None, f"heartbeat-{today}")
+
+    if weekday != 7 and _at(today, MORNING_REPORT_AT) <= now < _at(today, MORNING_REPORT_LATEST):
+        add("morning-report", today, f"morning-{today}")
 
     # Login health check, daily. Last in the list so it never delays
     # execute or daily (a probe turn can take a few minutes).

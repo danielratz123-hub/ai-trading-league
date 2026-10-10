@@ -372,6 +372,7 @@ touching the live league: `./scripts/restore.sh latest --test`.
 | `decide` | the morning after the week's last trading day, 10:00 | normally Saturday |
 | `check-logins` | every day 07:00, and Saturday 08:00 | 2 hours before decide |
 | `update-calendar` | Sundays 12:00 | holidays / half days |
+| `morning-report` | Mon-Sat 08:00 | Telegram: yesterday's profit/loss per agent (Mon-Fri); the week's and who leads (Saturday) |
 | `risk-check` | trading days 10:00-15:30, hourly | only with `LEARNING_ENABLED=1` (see LEARNING.md) |
 | `daily-review` | trading days 16:30, after `daily` | only with `LEARNING_ENABLED=1` |
 | `weekly-review` | Saturday 12:00; `decide` then follows | only with `LEARNING_ENABLED=1` (decide waits for it) |

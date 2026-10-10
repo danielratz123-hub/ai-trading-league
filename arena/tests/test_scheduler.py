@@ -22,9 +22,10 @@ def at(s: str) -> datetime:
 
 
 def names(now, history=None, started=True, cal=CAL, checks=False):
-    """Due jobs; the login checks are left out unless `checks`."""
+    """Due jobs; the login checks and the 08:00 status message (test_summary.py)
+    are left out unless `checks`."""
     return [(j.name, j.key) for j in due_jobs(at(now), cal, history or {}, started)
-            if checks or j.name != "check-logins"]
+            if checks or j.name not in ("check-logins", "morning-report")]
 
 
 def test_execute_runs_at_0950_eastern_only_on_trading_days():
