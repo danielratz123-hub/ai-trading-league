@@ -54,10 +54,8 @@ jobs:
           HOST=$(printf '%s' "$HOST" | tr -d '[:space:]'); USER_=$(printf '%s' "$USER_" | tr -d '[:space:]')
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           # Pasted on Windows the key may carry CR characters; OpenSSH rejects those.
-          printf '%s
-' "$KEY" | tr -d '' > ~/.ssh/id_deploy && chmod 600 ~/.ssh/id_deploy
-          printf '%s
-' "$KNOWN" | tr -d '' > ~/.ssh/known_hosts
+          printf '%s\n' "$KEY" | tr -d '\r' > ~/.ssh/id_deploy && chmod 600 ~/.ssh/id_deploy
+          printf '%s\n' "$KNOWN" | tr -d '\r' > ~/.ssh/known_hosts
           if ! ssh-keygen -y -f ~/.ssh/id_deploy > /dev/null 2>&1; then
             echo "VPS_SSH_KEY is not a valid private key: paste ALL lines, from -----BEGIN to -----END."; exit 1
           fi
