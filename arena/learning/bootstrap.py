@@ -62,6 +62,17 @@ def backfill_decisions(conn: sqlite3.Connection) -> int:
         targets = {t.slot: t for t in targets_from_json(payload[0])}
         raw = json.loads(w["decision_json"] or "{}")
         conf = {s.get("slot"): s.get("confidence") for s in raw.get("slots", []) if isinstance(s, dict)}
+        # Orders stored by older versions of the code lack the reasons; the
+        # agent's own decision always has them.
+        slot_reason = {s.get("slot"): str(s.get("reason") or "") for s in raw.get("slots", []) if isinstance(s, dict)}
+        pos_reason = {(s.get("slot"), str(k).upper().strip()): str(v) for s in raw.get("slots", []) if isinstance(s, dict)
+                      for k, v in (s.get("position_reasons") or {}).items()}
+        exit_reason = {str(k).upper().strip(): str(v) for k, v in (raw.get("exit_reasons") or {}).items()}
+
+        def why_for(t, slot, ticker=None):
+            return ((t.notes.get(ticker) if ticker else None) or pos_reason.get((slot, ticker))
+                    or (exit_reason.get(ticker) if ticker and not t.weights.get(ticker) else None)
+                    or t.reason or slot_reason.get(slot) or None)
         at = w["finished_at"] or datetime.now(timezone.utc).isoformat(timespec="seconds")
         already = conn.execute("SELECT 1 FROM decisions WHERE agent_id=? AND week_no=? AND checkpoint='weekly_rebalance'",
                                (a, w["week_no"])).fetchone()
@@ -92,7 +103,7 @@ def backfill_decisions(conn: sqlite3.Connection) -> int:
         for slot, t in sorted(targets.items()):
             s = strat.in_slot(conn, a, slot)
             if s is None:
-                s = strat.create(conn, a, slot, t.name or f"slot {slot}", t.reason or t.name or f"slot {slot}", None,
+                s = strat.create(conn, a, slot, t.name or f"slot {slot}", why_for(t, slot) or t.name or f"slot {slot}", None,
                                  "initial", "existing slot, migrated into the learning layer", w["week_no"], at)
             old = before.get(slot)
             k = 0
@@ -101,9 +112,9 @@ def backfill_decisions(conn: sqlite3.Connection) -> int:
                 action = journal.action_for(o, nw) or ("hold" if nw else None)
                 if action:
                     k += 1
-                    rec(s.version_id, action, t.notes.get(ticker) or t.reason, ticker, round(nw, 6), slot)
+                    rec(s.version_id, action, why_for(t, slot, ticker), ticker, round(nw, 6), slot)
             if not k:
-                rec(s.version_id, "hold", t.reason or "all cash", slot=slot)
+                rec(s.version_id, "hold", why_for(t, slot) or "all cash", slot=slot)
         prev[a] = targets
         if w["status"] in ("executed", "scored"):
             journal.link_trades(conn, a, w["exec_date"], "weekly_rebalance", w["week_no"])
