@@ -762,6 +762,19 @@ def run_review(conn: sqlite3.Connection, agent_id: str, kind: str, day: str, run
                on_risk_actions: Callable | None = None) -> dict:
     """Run one review for one agent. Returns a summary dict."""
     assert kind in KINDS
+    from ..logs import bind
+    with bind(agent=agent_id, model=_model_of(agent_id), review=kind):
+        return _run_review(conn, agent_id, kind, day, runner, as_of, dry_run, situation, on_risk_actions)
+
+
+def _model_of(agent_id: str) -> str | None:
+    from ..config import SETTINGS
+    return SETTINGS.models.get(agent_id) or "(cli default)"
+
+
+def _run_review(conn, agent_id, kind, day, runner, as_of, dry_run, situation, on_risk_actions) -> dict:
+    import logging
+    log = logging.getLogger("arena.review")
     as_of = as_of or _now()
     inp, lesson_ids = build_input(conn, agent_id, kind, as_of, day, situation)
     prompt = render_prompt(kind, inp)
@@ -770,6 +783,7 @@ def run_review(conn: sqlite3.Connection, agent_id: str, kind: str, day: str, run
         run_id = conn.execute("INSERT INTO review_runs(kind, agent_id, as_of, day, status, input_sha256, dry_run, "
                               "started_at) VALUES (?,?,?,?,'running',?,?,?)",
                               (kind, agent_id, as_of, day, sha, int(dry_run), _now())).lastrowid
+    log.info("review %s started (review_run %s, %d strategies)", kind, run_id, len(inp["strategies"]))
     res = runner(agent_id, kind, prompt, inp)
     if res.output is not None:
         # Defense in depth: the runner validated already; never apply unvalidated output.
@@ -804,6 +818,8 @@ def run_review(conn: sqlite3.Connection, agent_id: str, kind: str, day: str, run
         log_event(conn, "info" if status == "ok" else "error", f"review:{kind}:{agent_id}",
                   f"{day}: {status}; applied {len(ctx.applied)}, rejected {len(ctx.rejected)}"
                   + (f"; {fallback_error[:300]}" if fallback_error else ""))
+    log.info("review %s finished: %s, %d applied, %d rejected, %d attempt(s)%s", kind, status, len(ctx.applied),
+                len(ctx.rejected), res.attempts, f"; {fallback_error[:200]}" if fallback_error else "")
     if fallback_error and not dry_run:
         alerts.send(f"{kind.capitalize()} review FELL BACK TO HOLD ({agent_id}, {day}): {fallback_error[:400]}",
                     level="warning")

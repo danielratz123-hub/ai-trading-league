@@ -462,3 +462,93 @@ with all capabilities dropped and `no-new-privileges`.
 | `engine` unhealthy | `docker compose logs engine`; `... arena.main health --scheduler` |
 | Login alerts | step 8 |
 | Setup page "only works on the computer running the league" | use the SSH tunnel and `localhost`, not the server IP |
+
+---
+
+## Kill switch
+
+```bash
+docker compose exec engine python -m arena.main pause                 # the whole league
+docker compose exec engine python -m arena.main pause --agent gpt     # one agent
+docker compose exec engine python -m arena.main resume [--agent gpt]
+```
+
+The dashboard's Admin button does the same (`POST /api/admin/pause?agent=gpt`,
+with the ADMIN_TOKEN). It takes effect at the next job (within one cycle):
+a paused agent gets no weekly turn, its waiting rebalance / tilts are
+skipped, it isn't reviewed or woken by the risk check. A global pause also
+stops decide and execute. The engine's own stop-loss / take-profit /
+forced-cover exits keep protecting open positions either way. Every flip is
+announced on Telegram.
+
+## Monitoring from outside
+
+A monitor on the server dies with the server, so two free outside services
+watch it:
+
+1. **Healthchecks.io** (the engine): create a check with period 5 minutes
+   and grace 10 minutes, connect Telegram or email as its alert channel,
+   and put its ping URL in `.env` as `HEALTHCHECK_PING_URL=...`, then
+   `docker compose up -d`. The scheduler pings it every 5 minutes, and
+   pings `/fail` when the database, the disk or the Alpaca API has a
+   problem. Engine stopped, stuck or server down: no pings, so you get an alert.
+2. **UptimeRobot** (the website): an HTTP monitor on `https://<DOMAIN>/healthz`
+   every 5 minutes (that endpoint needs no login).
+
+Test it: `docker compose stop engine`, wait for the alert (~15 minutes),
+`docker compose start engine`.
+
+## Logs
+
+Every job run has a `run_id` (`job-<n>`, the `job_runs` id). On the server
+the logs are JSON lines with `run_id`, `job`, and for agent work `agent`
+and `model`; `data/logs/<date>.jsonl` holds every line every job printed:
+
+```bash
+docker compose exec engine sh -c 'grep "\"run_id\": \"job-123\"" /app/data/logs/2026-10-12.jsonl'
+```
+
+(The plain `data/logs/<date>_<job>.log` files are still written too.)
+
+## Staging
+
+```bash
+docker compose exec engine python -m arena.main staging --fake-agents             # last trading day
+docker compose exec engine python -m arena.main staging --date 2026-10-09 --with-week
+```
+
+Replays a full trading day (open, every hourly risk check, close, daily
+review; `--with-week`: the weekly review too) on a fresh copy,
+`data/staging.db`, with the paper mirror forced off. The live league is
+only read. Without `--fake-agents` the real agents answer (plan usage).
+Whole past weeks: `simulate`.
+
+## GitHub and automatic deploys
+
+Pushes run lint + tests on GitHub Actions; a push to `main` then deploys
+with `scripts/deploy.sh` (waits until no job is running and outside
+09:45-10:05 ET, rebuilds, health check, rolls back automatically if the new
+version is unhealthy, Telegram either way). One-time setup:
+
+1. **Repo**: a *private* GitHub repository; push this project to it (`main`).
+2. **Server pulls from GitHub** with a read-only deploy key:
+   ```bash
+   ssh-keygen -t ed25519 -N '' -f ~/.ssh/github_pull -C league-server
+   cat ~/.ssh/github_pull.pub     # GitHub repo -> Settings -> Deploy keys -> Add (read-only)
+   printf 'Host github.com\n  IdentityFile ~/.ssh/github_pull\n  IdentitiesOnly yes\n' >> ~/.ssh/config
+   cd ~/league && git remote add origin git@github.com:<you>/<repo>.git && git fetch origin
+   ```
+3. **GitHub reaches the server** with its own key that may ONLY run the deploy script:
+   ```bash
+   ssh-keygen -t ed25519 -N '' -f ~/.ssh/github_deploy -C github-actions
+   printf 'command="cd ~/league && ./scripts/deploy.sh \\"$SSH_ORIGINAL_COMMAND\\"",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty %s\n' "$(cat ~/.ssh/github_deploy.pub)" >> ~/.ssh/authorized_keys
+   cat ~/.ssh/github_deploy       # -> secret VPS_SSH_KEY (then: rm ~/.ssh/github_deploy)
+   ssh-keyscan <server IP>        # -> secret VPS_KNOWN_HOSTS
+   ```
+   Plus secrets `VPS_HOST` (the IP) and `VPS_USER` (`daniel`), in the repo's
+   Settings -> Secrets and variables -> Actions.
+4. In the repo's Settings -> Environments, create `production` (optionally
+   with required reviewers, to approve each deploy).
+
+A deploy that waited too long (a long agent turn) exits without changing
+anything; re-run it with Actions -> CI -> Run workflow.

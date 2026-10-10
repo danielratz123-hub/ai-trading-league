@@ -103,7 +103,7 @@ def test_jobs_run_against_the_schedulers_database():
 def test_only_one_scheduler_per_league(tmp_path):
     import subprocess
     import sys
-    from arena.scheduler import AlreadyRunning, single_instance_lock
+    from arena.scheduler import single_instance_lock
     db = tmp_path / "arena.db"
     lock = single_instance_lock(db)
     # A second process must be refused while the first holds the lock.

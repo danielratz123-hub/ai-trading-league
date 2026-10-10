@@ -10,7 +10,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from arena import league, ledger, prices, risk
+from arena import league, ledger, prices
 from arena.agents import cli
 from arena.agents.cli import ClaudeCodeAgent, CliAgent, CodexAgent, McpLaunch, mcp_launch
 from arena.config import PROJECT_ROOT

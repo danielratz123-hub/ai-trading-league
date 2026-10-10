@@ -9,7 +9,6 @@ dashboard password is set, and always on the server (see auth.py).
 from __future__ import annotations
 
 import hmac
-import json
 import os
 import sqlite3
 from contextlib import asynccontextmanager
@@ -208,12 +207,12 @@ def create_app() -> FastAPI:
         return learning.overview(conn)
 
     @app.post("/api/admin/pause", dependencies=[Depends(require_admin)])
-    def pause():
-        return _set_paused(True)
+    def pause(agent: str | None = Query(None)):
+        return _set_paused(True, agent)
 
     @app.post("/api/admin/resume", dependencies=[Depends(require_admin)])
-    def resume():
-        return _set_paused(False)
+    def resume(agent: str | None = Query(None)):
+        return _set_paused(False, agent)
 
     # Setup / control panel: only on this computer (see control.py).
     if control.control_enabled():
@@ -225,11 +224,13 @@ def create_app() -> FastAPI:
     return app
 
 
-def _set_paused(paused: bool) -> dict:
+def _set_paused(paused: bool, agent: str | None = None) -> dict:
     conn = connect(db_path())
     try:
-        league.set_paused(conn, paused)
-        return {"paused": league.is_paused(conn)}
+        if agent is not None and agent not in ledger.agent_ids(conn):
+            raise HTTPException(404, f"Unknown agent {agent!r}")
+        league.set_paused(conn, paused, agent)
+        return {"paused": league.is_paused(conn), "paused_agents": league.paused_agents(conn)}
     finally:
         conn.close()
 

@@ -11,6 +11,7 @@ Agents only ever *propose*: decision.check validates, the ledger executes.
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import sqlite3
 import tempfile
@@ -59,16 +60,42 @@ def _now() -> str:
 # Pause
 # --------------------------------------------------------------------------
 
-def is_paused(conn) -> bool:
-    row = conn.execute("SELECT value FROM league_state WHERE key='paused'").fetchone()
+# The kill switch. Global ('paused'): decide and execute refuse to run, no
+# reviews, no risk wake-ups, no tilts. Per agent ('paused:<agent>'): that
+# agent gets no weekly turn, its waiting rebalance / tilts are skipped, it is
+# not reviewed or woken by the risk check. Either way the engine's own
+# protective exits (stop-loss / take-profit / forced cover) keep running:
+# they only ever reduce risk. Every job reads the flags when it starts.
+
+def _pause_key(agent_id: str | None) -> str:
+    return "paused" if agent_id is None else f"paused:{agent_id}"
+
+
+def is_paused(conn, agent_id: str | None = None) -> bool:
+    """Globally paused, or (with agent_id) that agent paused or the league paused."""
+    keys = ["paused"] + ([_pause_key(agent_id)] if agent_id else [])
+    rows = conn.execute(f"SELECT value FROM league_state WHERE key IN ({','.join('?' * len(keys))})", keys).fetchall()
+    return any(r[0] == "1" for r in rows)
+
+
+def agent_paused(conn, agent_id: str) -> bool:
+    row = conn.execute("SELECT value FROM league_state WHERE key=?", (_pause_key(agent_id),)).fetchone()
     return bool(row and row[0] == "1")
 
 
-def set_paused(conn, paused: bool) -> None:
+def paused_agents(conn) -> list[str]:
+    return sorted(r[0].split(":", 1)[1] for r in conn.execute(
+        "SELECT key FROM league_state WHERE key LIKE 'paused:%' AND value='1'"))
+
+
+def set_paused(conn, paused: bool, agent_id: str | None = None) -> None:
     with transaction(conn):
-        conn.execute("INSERT OR REPLACE INTO league_state(key, value) VALUES ('paused', ?)",
-                     ("1" if paused else "0",))
-        log_event(conn, "info", "league", "paused" if paused else "resumed")
+        conn.execute("INSERT OR REPLACE INTO league_state(key, value) VALUES (?, ?)",
+                     (_pause_key(agent_id), "1" if paused else "0"))
+        who = "league" if agent_id is None else agent_id
+        log_event(conn, "info", "league", f"{who} {'paused' if paused else 'resumed'}")
+    alerts.send(f"Kill switch: {'the whole league' if agent_id is None else agent_id} "
+                f"{'PAUSED' if paused else 'resumed'}.", level="warning" if paused else "good")
 
 
 def _require_running(conn) -> None:
@@ -155,6 +182,10 @@ def decide(conn: sqlite3.Connection, decision_date: str | None = None, simulate:
     reports = []
     login_problems: dict[str, str] = {}
     for agent_id in ledger.agent_ids(conn):
+        if agent_paused(conn, agent_id):
+            # Kill switch: no turn, so no orders; its portfolio stays as it is.
+            reports.append(TurnReport(agent_id, "paused", 0, 0, 0, 0, "agent paused (kill switch)"))
+            continue
         done = conn.execute("SELECT id, status FROM agent_turns WHERE week_no=? AND agent_id=?",
                             (week_no, agent_id)).fetchone()
         if done and done["status"] != "running":
@@ -180,7 +211,11 @@ def decide(conn: sqlite3.Connection, decision_date: str | None = None, simulate:
             if not ok:
                 _login_problem(conn, login_problems, agent_id, week_no, msg)
                 continue
-            report = _run_cli_turn(conn, adapter, week_no, decision_date, exec_date, simulate)
+            from .logs import bind
+            with bind(agent=agent_id, model=adapter.model or "(cli default)"):
+                logging.getLogger("arena.decide").info("weekly turn started (week %s)", week_no)
+                report = _run_cli_turn(conn, adapter, week_no, decision_date, exec_date, simulate)
+                logging.getLogger("arena.decide").info("weekly turn finished: %s", report.status)
             if (report.status == "failed" and report.attempts == 0 and report.tool_calls == 0
                     and looks_like_login_error(report.error)):
                 # The login broke during the turn (the CLI never got as far
@@ -510,6 +545,11 @@ def execute(conn: sqlite3.Connection) -> ExecReport:
         for a in ledger.agent_ids(conn):
             orders = conn.execute("SELECT * FROM pending_orders WHERE agent_id=? AND kind='rebalance' "
                                   "AND status='pending' AND exec_date=?", (a, d)).fetchall()
+            if agent_paused(conn, a):
+                for o in orders:
+                    conn.execute("UPDATE pending_orders SET status='skipped', note='agent paused (kill switch)' "
+                                 "WHERE id=?", (o["id"],))
+                orders = []
             n = 0
             seq0 = conn.execute("SELECT COALESCE(MAX(seq), 0) FROM trades").fetchone()[0]
             for o in orders:
@@ -533,7 +573,8 @@ def _order_check(conn, agent_id: str, d: str, targets, week_no: int):
         return None
     from .learning.execution import order_check
     equity = ledger.value_agent(conn, agent_id, d, "open").equity
-    return order_check(conn, agent_id, d, targets, equity, "rebalance", "weekly")
+    decided_on = conn.execute("SELECT decision_date FROM weeks WHERE week_no=?", (week_no,)).fetchone()[0]
+    return order_check(conn, agent_id, d, targets, equity, "rebalance", "weekly", analysis_date=decided_on)
 
 
 def _link_trades(conn, agent_id: str, d: str, week_no: int, after_seq: int) -> None:

@@ -10,7 +10,7 @@ import pytest
 from arena import alerts, mirror
 from arena.db import connect
 
-from .test_scheduler import at, names
+from .test_scheduler import names
 
 
 @pytest.fixture

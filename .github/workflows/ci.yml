@@ -1,0 +1,53 @@
+# Lint + tests on every push and pull request; on a push to main, deploy to
+# the VPS (scripts/deploy.sh: waits for a quiet moment, rebuilds, health
+# check, automatic rollback). Setup: DEPLOY.md "GitHub and automatic deploys".
+#
+# Secrets (repo Settings -> Secrets and variables -> Actions):
+#   VPS_HOST         the server's IP
+#   VPS_USER         daniel
+#   VPS_SSH_KEY      the private key from ~/.ssh/github_deploy on the server
+#   VPS_KNOWN_HOSTS  the output of: ssh-keyscan <server IP>
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:        # "Run workflow" button: re-run a deploy that waited too long
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      - run: pip install -r requirements.txt ruff==0.6.9
+      - name: Lint (pyflakes rules)
+        run: ruff check --select F arena
+      - name: Tests (no network, no keys)
+        run: python -m pytest -q -p no:cacheprovider arena/tests
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: production
+    steps:
+      - name: Deploy over SSH
+        env:
+          KEY: ${{ secrets.VPS_SSH_KEY }}
+          KNOWN: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/id_deploy && chmod 600 ~/.ssh/id_deploy
+          printf '%s\n' "$KNOWN" > ~/.ssh/known_hosts
+          # The server allows this key to run only scripts/deploy.sh (forced command).
+          ssh -i ~/.ssh/id_deploy ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} "${{ github.sha }}"

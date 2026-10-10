@@ -130,6 +130,9 @@ def run_check(conn: sqlite3.Connection, d: str, now: datetime | None = None,
                 if s and strat.flag_emergency(conn, s.strategy_id, e["detail"], as_of):
                     log_event(conn, "warning", f"risk:{e['agent_id']}",
                               f"slot {e['slot']} flagged for an emergency rewrite: {e['detail']}")
+                    from .. import alerts
+                    alerts.send(f"Drawdown limit hit ({e['agent_id']}, slot {e['slot']}): {e['detail']}. "
+                                f"Flagged for an emergency rewrite in the next daily review.", level="error")
         for agent_id, val in vals.items():
             for t, px in val.prices.items():
                 fresh = collector.latest_minute_price(conn, t, as_of)
@@ -141,7 +144,11 @@ def run_check(conn: sqlite3.Connection, d: str, now: datetime | None = None,
            "woken": [], "fills": 0}
     if runner is None:
         return out
+    from ..league import is_paused
     for agent_id in woke:
+        if is_paused(conn, agent_id):
+            out["woken"].append({"agent": agent_id, "status": "not woken: paused (kill switch)"})
+            continue
         mine = [e for e in events if e["agent_id"] == agent_id and not e["suppressed"]]
         situation = {"fired": [{k: e[k] for k in ("slot", "ticker", "rule", "value", "threshold", "detail")} for e in mine],
                      "intraday_market": {"spy_change_pct": mctx["spy_change"], "vix_proxy_change_pct": mctx["vix_proxy_change"]},

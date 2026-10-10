@@ -278,13 +278,20 @@ def run_job(conn: sqlite3.Connection, job: Job, log_dir: Path, db_path: str | Pa
     log.info("starting %s %s", job.name, job.key)
     log_file = log_dir / f"{started:%Y-%m-%d}_{job.name}.log"
     try:
-        p = subprocess.run(job.argv(db_path), cwd=PROJECT_ROOT, capture_output=True, text=True,
+        # The run_id ties every log line of this run together (arena/logs.py).
+        env = {**os.environ, "ARENA_RUN_ID": f"job-{run_id}", "ARENA_JOB": job.name}
+        p = subprocess.run(job.argv(db_path), cwd=PROJECT_ROOT, capture_output=True, text=True, env=env,
                            timeout=TIMEOUTS.get(job.name, 3600), encoding="utf-8", errors="replace")
         code, output = p.returncode, (p.stdout or "") + (p.stderr or "")
     except subprocess.TimeoutExpired as e:
         code, output = 124, f"timed out after {e.timeout}s"
     with open(log_file, "a", encoding="utf-8") as f:
         f.write(f"=== {started.isoformat()} {' '.join(job.argv(db_path)[2:])} -> exit {code}\n{output}\n")
+    try:
+        from .logs import write_job_lines
+        write_job_lines(log_dir, f"job-{run_id}", job.name, job.key, started, output, code)
+    except Exception:  # noqa: BLE001 - logging must never break the scheduler
+        log.exception("could not write the JSON job log")
     with transaction(conn):
         conn.execute("UPDATE job_runs SET finished_at=?, exit_code=?, output_tail=? WHERE id=?",
                      (datetime.now(ET).isoformat(), code, output[-4000:], run_id))
@@ -437,6 +444,8 @@ def run_forever(db_path: str | Path = SETTINGS.db_path, tick_seconds: int = 30) 
     _die_with_parent()
     from .health import start_heartbeat
     start_heartbeat(db_path, _STOP)        # Docker's healthcheck watches this file
+    from .health import start_outside_ping
+    start_outside_ping(db_path, _STOP, os.getenv("HEALTHCHECK_PING_URL", "").strip())   # outside monitor
     conn = connect(db_path)
     log_dir = Path(db_path).resolve().parent / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)

@@ -1,7 +1,6 @@
 """Live dashboard values during market hours (no network)."""
 from datetime import datetime
 
-import pandas as pd
 import pytest
 
 from arena import ledger

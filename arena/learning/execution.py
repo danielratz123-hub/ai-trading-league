@@ -51,16 +51,21 @@ def current_targets(conn: sqlite3.Connection, agent_id: str, val: ledger.Valuati
 
 
 def order_check(conn: sqlite3.Connection, agent_id: str, d: str, targets: list[SlotTarget], equity: float,
-                reason: str, source: str):
-    """A callback for ledger.rebalance: returns True to allow (slot, ticker, delta, price)."""
+                reason: str, source: str, analysis_date: str | None = None):
+    """A callback for ledger.rebalance: returns True to allow (slot, ticker, delta, price).
+    analysis_date: the close the decision was based on (stale-analysis check)."""
+    from ..prices import price_on_or_before
     by_slot = {t.slot: t for t in targets}
+    loss = hardlimits.day_loss(conn, agent_id, d, equity)
 
     def check(slot: int, ticker: str, delta: float, price: float) -> bool:
         t = by_slot.get(slot)
+        ref = price_on_or_before(conn, ticker, analysis_date) if analysis_date else None
         o = hardlimits.Order(agent_id, slot, ticker, delta, price, d, reason,
                              ledger.position_shares(conn, agent_id, slot, ticker),
                              (t.allocation * equity) if t else 0.0,
-                             bool(t and (t.risk_orders.get(ticker) or {}).get("stop_loss")))
+                             bool(t and (t.risk_orders.get(ticker) or {}).get("stop_loss")),
+                             day_loss=loss, analysis_price=ref[1] if ref else None)
         errs = hardlimits.check_order(conn, o)
         if errs:
             hardlimits.reject(conn, agent_id, "order", slot, "order",
@@ -89,8 +94,13 @@ def run_open(conn: sqlite3.Connection, d: str, weekly_executed: bool) -> dict[st
     fills: dict[str, int] = {}
     rows = conn.execute(f"SELECT * FROM pending_orders WHERE status='pending' AND exec_date<=? AND kind IN "
                         f"({','.join('?' * len(PENDING_KINDS))}) ORDER BY id", (d, *PENDING_KINDS)).fetchall()
+    from ..league import agent_paused
     for o in rows:
         a = o["agent_id"]
+        if agent_paused(conn, a):
+            conn.execute("UPDATE pending_orders SET status='skipped', note=note || ' | agent paused (kill switch)' "
+                         "WHERE id=?", (o["id"],))
+            continue
         if weekly_executed:
             conn.execute("UPDATE pending_orders SET status='skipped', note=note || ' | superseded by the weekly "
                          "rebalance' WHERE id=?", (o["id"],))
@@ -113,7 +123,8 @@ def run_open(conn: sqlite3.Connection, d: str, weekly_executed: bool) -> dict[st
             reason = "emergency"
         seq0 = conn.execute("SELECT COALESCE(MAX(seq), 0) FROM trades").fetchone()[0]
         res = ledger.rebalance(conn, a, d, targets, reason=reason,
-                               order_check=order_check(conn, a, d, targets, val.equity, reason, o["kind"]))
+                               order_check=order_check(conn, a, d, targets, val.equity, reason, o["kind"],
+                                                       analysis_date=o["created_date"]))
         journal.link_trades(conn, a, d, "daily_review", None, after_seq=seq0)
         conn.execute("UPDATE pending_orders SET status='done', note=COALESCE(note,'') || ? WHERE id=?",
                      (f" | {len(res.trades)} fill(s)" + (f"; skipped {res.skipped}" if res.skipped else ""), o["id"]))

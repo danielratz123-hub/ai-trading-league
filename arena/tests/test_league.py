@@ -1,10 +1,9 @@
 """Phase 3: the weekly league loop, end to end, with scripted agents."""
 import json
-import math
 
 import pytest
 
-from arena import league, ledger, scoring
+from arena import league, ledger
 from arena.agents import briefing
 from arena.agents.base import run_turn
 from arena.db import dry_run_guard

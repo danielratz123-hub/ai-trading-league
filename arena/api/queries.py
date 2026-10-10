@@ -52,6 +52,8 @@ def league_status(conn) -> dict:
     mark_date, mark_field = display_mark(conn)
     return {
         "paused": bool(paused and paused[0] == "1"),
+        "paused_agents": sorted(r[0].split(":", 1)[1] for r in conn.execute(
+            "SELECT key FROM league_state WHERE key LIKE 'paused:%' AND value='1'")),
         "prices_up_to": latest_price_date(conn),
         "as_of": mark_date,
         "as_of_field": mark_field,           # "close", or "open" on a trading day before its close

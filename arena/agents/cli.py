@@ -442,7 +442,7 @@ def probe(agent: CliAgent) -> dict:
     ok = bool(pinged) and run.shell_commands == 0 and run.file_changes == 0 and run.error is None
     summary = (f"ping {'reached' if pinged else 'did NOT reach'} the arena tools; "
                f"shell commands run: {run.shell_commands}; file changes: {run.file_changes}; "
-               + (f"jailed (Landlock); " if agent.jailed() else "")
+               + ("jailed (Landlock); " if agent.jailed() else "")
                + (f"error: {run.error}; " if run.error else "")
                + f"model said: {run.final_text.strip()[:300]!r}")
     return {"ok": ok, "summary": summary, "run": run}

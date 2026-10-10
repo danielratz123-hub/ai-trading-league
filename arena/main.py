@@ -24,7 +24,7 @@ League (times are US Eastern)
     replan           redo the first week's decisions (only before any trade) with the latest data
     trade-now        during market hours: fill the waiting week now at the latest price
     complete-now     during market hours: buy planned positions that had no price, fix negative cash
-    pause / resume   stop / restart decide and execute
+    pause / resume   the kill switch: stop / restart decide and execute (--agent X: one agent only)
     app              the easy way: dashboard + setup page, opens your browser (start.cmd runs this)
     serve            run the dashboard + read-only API on http://127.0.0.1:8000
     hash-password    make DASHBOARD_PASSWORD_HASH for the dashboard login (asks for the password)
@@ -39,6 +39,7 @@ League (times are US Eastern)
     test-alert       send a test Telegram alert
     reconcile        compare the Alpaca paper account with the league's records (alert on mismatch)
     heartbeat        send the daily "still alive" message
+    staging          replay a full trading day on a copy (data/staging.db; --date, --with-week, --fake-agents)
     morning-report   08:00 ET Telegram status: yesterday's profit/loss (Mon-Fri), the week's (Saturday)
     mirror           show (or with --apply, place) the paper-account orders that copy the leader
 Learning layer (LEARNING_ENABLED=1 in .env; see LEARNING.md)
@@ -248,7 +249,8 @@ def cmd_complete_now(conn, args) -> None:
 def cmd_status(conn, args) -> None:
     d = prices.latest_price_date(conn)
     agents = ledger.agent_ids(conn)
-    print(f"Prices up to: {d or '(none)'}" + ("   [LEAGUE PAUSED]" if league.is_paused(conn) else ""))
+    print(f"Prices up to: {d or '(none)'}" + ("   [LEAGUE PAUSED]" if league.is_paused(conn) else "")
+          + (f"   [PAUSED: {', '.join(league.paused_agents(conn))}]" if league.paused_agents(conn) else ""))
     if not agents:
         print("No agents yet. Run `kickoff` to start the league.")
         return
@@ -347,14 +349,31 @@ def cmd_check_logins(conn, args) -> None:
 
 
 def cmd_pause(conn, args) -> None:
+    if args.agent:
+        _known_agent(conn, args.agent)
+        league.set_paused(conn, True, args.agent)
+        print(f"{args.agent} paused: no weekly turn, its waiting orders are skipped, no reviews or risk "
+              f"wake-ups. Engine stop-losses still protect its positions. The other agent plays on.")
+        return
     league.set_paused(conn, True)
-    print("League paused: decide and execute will refuse to run. (daily keeps running so open "
-          "positions stay protected.)")
+    print("League paused: decide and execute will refuse to run, no reviews or risk wake-ups. (daily keeps "
+          "running so open positions stay protected.)")
 
 
 def cmd_resume(conn, args) -> None:
+    if args.agent:
+        _known_agent(conn, args.agent)
+        league.set_paused(conn, False, args.agent)
+        print(f"{args.agent} resumed.")
+        return
     league.set_paused(conn, False)
-    print("League resumed.")
+    print("League resumed." + (f" Still paused individually: {', '.join(league.paused_agents(conn))}."
+                               if league.paused_agents(conn) else ""))
+
+
+def _known_agent(conn, agent_id: str) -> None:
+    if agent_id not in ledger.agent_ids(conn):
+        sys.exit(f"Unknown agent {agent_id!r}; agents: {', '.join(ledger.agent_ids(conn))}")
 
 
 def _maybe_mirror(conn, d, args) -> None:
@@ -615,6 +634,15 @@ def cmd_heartbeat(conn, args) -> None:
     print("(sent to Telegram)" if sent else "(Telegram not configured: logged only)")
 
 
+def cmd_staging(conn, args) -> None:
+    """Replay a full trading day on a copy of the league (arena/staging.py)."""
+    from . import staging
+    out = staging.run_day(args.db, Path(args.db).with_name("staging.db"), args.date, _runner(conn, args),
+                          week=args.week_too)
+    print("== Summary")
+    _print_json({k: out[k] for k in ("day", "open", "risk_checks", "daily", "equity") if k in out})
+
+
 def cmd_morning_report(conn, args) -> None:
     """08:00 ET Telegram status: the last trading day (Mon-Fri), the week (Saturday)."""
     from . import alerts, summary
@@ -812,6 +840,7 @@ COMMANDS = {
     "reconcile": cmd_reconcile,
     "heartbeat": cmd_heartbeat,          # handled in main() before the database is opened
     "morning-report": cmd_morning_report,
+    "staging": cmd_staging,
     "risk-check": cmd_risk_check,
     "daily-review": cmd_daily_review,
     "weekly-review": cmd_weekly_review,
@@ -822,7 +851,7 @@ COMMANDS = {
     "review-dry-run": cmd_review_dry_run,
 }
 READ_ONLY = {"status", "tool", "check-agents", "init-db", "serve", "scheduler", "app", "hash-password",
-             "backup", "backups", "restore-backup", "test-alert", "check-logins", "health", "learning-status"}
+             "backup", "backups", "restore-backup", "test-alert", "check-logins", "health", "learning-status", "staging"}
 
 
 def _throwaway_copy(db: str, workdir: str) -> str:
@@ -868,13 +897,17 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--fake-agents", action="store_true",
                         help="review commands: answer 'hold' without calling any model (no plan usage)")
     parser.add_argument("--no-wake", action="store_true", help="risk-check: only log, never wake an agent")
+    parser.add_argument("--with-week", dest="week_too", action="store_true",
+                        help="staging: also run the weekly review after the day")
+    parser.add_argument("--agent", help="pause / resume: just this agent (the kill switch per agent)")
     parser.add_argument("--db", default=str(SETTINGS.db_path), help="database path")
     args = parser.parse_args(argv)
     if args.command == "review-dry-run":
         args.dry_run = True                 # always on a throwaway copy
     import os
     os.environ.setdefault("ARENA_DB", str(Path(args.db).resolve()))   # where alerts keep their state
-    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
+    from . import logs
+    logs.setup(logging.WARNING)            # JSON with a run_id on the server (arena/logs.py)
 
     if args.command == "health":
         # Runs every 30 s from Docker: no database connection/migration, no network.

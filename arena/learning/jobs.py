@@ -68,6 +68,9 @@ def daily_review(conn: sqlite3.Connection, d: str, runner: review.Runner, dry_ru
         return out
     after_grading(conn)
     for a in ledger.agent_ids(conn):
+        if is_paused(conn, a):
+            out["reviews"].append({"agent": a, "status": "skipped: agent paused"})
+            continue
         out["reviews"].append(review.run_review(conn, a, "daily", d, runner, dry_run=dry_run))
     return out
 
@@ -82,6 +85,9 @@ def weekly_review(conn: sqlite3.Connection, day: str, runner: review.Runner, dry
         return out
     after_grading(conn)
     for a in ledger.agent_ids(conn):
+        if is_paused(conn, a):
+            out["agents"][a] = {"skipped": "agent paused"}
+            continue
         with transaction(conn):
             verdicts = shadow.evaluate(conn, a, week_end, day)
         res = review.run_review(conn, a, "weekly", day, runner, dry_run=dry_run)

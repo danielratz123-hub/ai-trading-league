@@ -68,5 +68,15 @@ def _no_real_alerts(monkeypatch, tmp_path_factory):
 def _not_the_server(monkeypatch):
     """Tests describe the app on its own: never inherit a real server's
     settings (login, admin token, Codex sandbox mode) from the environment."""
-    for k in ("ARENA_SERVER", "DASHBOARD_PASSWORD_HASH", "ADMIN_TOKEN", "ARENA_DISABLE_CONTROL"):
+    for k in ("ARENA_SERVER", "DASHBOARD_PASSWORD_HASH", "ADMIN_TOKEN", "ARENA_DISABLE_CONTROL",
+              "LEARNING_ENABLED", "HEALTHCHECK_PING_URL", "ARENA_LOG_JSON"):
         monkeypatch.delenv(k, raising=False)
+    # Never upload to the real backup storage from a test, even on the server
+    # (empty values, so the subprocesses' .env loading can't fill them in).
+    for k in ("BACKUP_RCLONE_REMOTE", "BACKUP_S3_BUCKET", "BACKUP_S3_ENDPOINT", "BACKUP_S3_ACCESS_KEY_ID",
+              "BACKUP_S3_SECRET_ACCESS_KEY"):
+        monkeypatch.setenv(k, "")
+    # The server runs Codex without its own sandbox (DEPLOY.md); tests describe the default.
+    from arena.config import SETTINGS
+    if SETTINGS.codex_sandbox != "read-only":
+        object.__setattr__(SETTINGS, "codex_sandbox", "read-only")      # frozen dataclass: no monkeypatch

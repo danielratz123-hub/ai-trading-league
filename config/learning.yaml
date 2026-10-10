@@ -50,6 +50,8 @@ hard_limits:                          # anti-gambling, enforced in code, agents 
   allowed_instruments: [us_stocks, us_etfs]   # no options, no leveraged/inverse ETFs, no crypto
   min_price: 5.00                     # no penny stocks
   min_avg_daily_volume: 1000000       # liquid names only (20-day average)
+  max_daily_loss_pct: 0.05            # agent down >5% since the last close: only reducing orders until tomorrow
+  max_price_move_since_analysis_pct: 0.08   # price moved >8% since the close the decision was based on: refused
   # (added) Monday's scheduled weekly rebalance replaces whole slots at once
   # (a 5-stock slot changing all its names is 10 trades), so it doesn't count
   # towards the daily trade cap; neither does a capital tilt (it scales every

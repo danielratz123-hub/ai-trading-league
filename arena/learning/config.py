@@ -74,6 +74,8 @@ class HardLimits:
     allowed_instruments: tuple[str, ...]
     min_price: float
     min_avg_daily_volume: float
+    max_daily_loss_pct: float
+    max_price_move_since_analysis_pct: float
     trade_cap_includes_weekly_rebalance: bool
 
 
@@ -165,6 +167,7 @@ def parse(raw: dict) -> LearningConfig:
                                    float(h["max_short_exposure_pct"]), bool(h["every_position_needs_stop"]),
                                    int(h["max_trades_per_strategy_per_day"]), tuple(h["allowed_instruments"]),
                                    float(h["min_price"]), float(h["min_avg_daily_volume"]),
+                                   float(h["max_daily_loss_pct"]), float(h["max_price_move_since_analysis_pct"]),
                                    bool(h["trade_cap_includes_weekly_rebalance"])),
             learning=Learning(int(l["min_trades_for_rewrite"]), int(l["lesson_confirmations_to_activate"]),
                               int(l["rewrites_per_agent_per_week"]), int(l["cooldown_weeks_after_change"]),

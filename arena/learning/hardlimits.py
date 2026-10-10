@@ -22,7 +22,7 @@ import json
 import re
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from .. import universe
 from ..ledger import SlotTarget
@@ -170,6 +170,8 @@ class Order:
     held_shares: float           # position in this slot before the order
     slot_equity: float           # the strategy's equity the position is measured against
     has_stop: bool               # a stop_loss will be attached to the resulting position
+    day_loss: float | None = None        # the agent's loss since the last close (0.06 = down 6%)
+    analysis_price: float | None = None  # the close the decision was based on
 
 
 def trades_today(conn: sqlite3.Connection, agent_id: str, slot: int, d: str) -> int:
@@ -194,6 +196,13 @@ def check_order(conn: sqlite3.Connection, o: Order) -> list[str]:
     if o.reason in FORCED_REASONS or reduces(o):
         return []               # exits are always allowed: blocking them adds risk
     errs = list(instrument_errors(conn, o.ticker, o.d, o.price))
+    if o.day_loss is not None and o.day_loss >= hl.max_daily_loss_pct:
+        errs.append(f"the agent is down {o.day_loss:.1%} since the last close (daily loss limit "
+                    f"{hl.max_daily_loss_pct:.0%}): only reducing orders until tomorrow.")
+    if o.analysis_price and abs(o.price / o.analysis_price - 1) > hl.max_price_move_since_analysis_pct:
+        errs.append(f"{o.ticker}: price {o.price:.2f} moved {o.price / o.analysis_price - 1:+.1%} since the "
+                    f"close the decision was based on ({o.analysis_price:.2f}); the limit is "
+                    f"{hl.max_price_move_since_analysis_pct:.0%}, so the analysis is stale.")
     new_value = abs((o.held_shares + o.delta) * o.price)
     if o.slot_equity <= 0:
         errs.append(f"{o.ticker}: the strategy has no equity to size the position against.")
@@ -210,9 +219,28 @@ def check_order(conn: sqlite3.Connection, o: Order) -> list[str]:
     return errs
 
 
+def day_loss(conn: sqlite3.Connection, agent_id: str, d: str, equity_now: float) -> float | None:
+    """How much the agent is down since the last close before day d (deposits
+    since then don't count). None if there is no earlier close."""
+    row = conn.execute("SELECT seq, equity FROM snapshots WHERE agent_id=? AND kind='daily' AND date<? "
+                       "ORDER BY seq DESC LIMIT 1", (agent_id, d)).fetchone()
+    if row is None or row["equity"] <= 0:
+        return None
+    added = conn.execute("SELECT COALESCE(SUM(amount), 0) FROM deposits WHERE agent_id=? AND seq>?",
+                         (agent_id, row["seq"])).fetchone()[0]
+    return max(0.0, 1 - (equity_now - added) / row["equity"])
+
+
 def reject(conn: sqlite3.Connection, agent_id: str, source: str, slot: int | None, kind: str,
            detail: dict, reason: str, review_run_id: int | None = None) -> None:
-    """Log a refused change (shown on the dashboard's 'limits enforced' log)."""
+    """Log a refused change (shown on the dashboard's 'limits enforced' log).
+    A refused ORDER (a guardrail stopping a trade) also goes to Telegram,
+    at most once an hour per agent; refused review changes are only logged."""
+    if source == "order":
+        from .. import alerts
+        alerts.send(f"Guardrail refused an order ({agent_id}, slot {slot}): "
+                    f"{detail.get('ticker', '?')} {detail.get('shares', 0):+.4f} sh. {reason[:300]}",
+                    level="warning", key=f"guardrail-{agent_id}", every=timedelta(hours=1))
     conn.execute("INSERT INTO rejected_changes(ts, agent_id, source, slot, kind, detail, reason, review_run_id) "
                  "VALUES (?,?,?,?,?,?,?,?)",
                  (_now(), agent_id, source, slot, kind, json.dumps(detail, default=str), reason[:1000], review_run_id))

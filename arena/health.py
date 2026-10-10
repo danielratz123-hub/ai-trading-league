@@ -77,3 +77,58 @@ def check(db_path: str | Path, scheduler: bool = False) -> dict:
     return {"ok": not problems, "problems": problems, "db": db_ok,
             "scheduler_heartbeat_age_s": None if age is None else round(age),
             "disk_free_gb": round(free, 1)}
+
+
+# --------------------------------------------------------------------------
+# Outside monitoring (ROADMAP 0.9)
+# --------------------------------------------------------------------------
+# A monitor on this server dies with it. So the scheduler pings an outside
+# service (e.g. Healthchecks.io, free) every PING_EVERY seconds; if the pings
+# stop (server down, engine stuck) or report a failure, THAT service alerts
+# you. Set HEALTHCHECK_PING_URL in .env to the check's ping URL.
+
+PING_EVERY = 300              # seconds
+ALPACA_CHECK_EVERY = 1800     # seconds
+
+
+def alpaca_reachable() -> str | None:
+    """None if Alpaca's API answers with these keys, else the problem."""
+    try:
+        from alpaca.trading.client import TradingClient
+
+        from .config import require_env
+        TradingClient(require_env("ALPACA_API_KEY"), require_env("ALPACA_SECRET_KEY"), paper=True).get_clock()
+        return None
+    except Exception as e:  # noqa: BLE001
+        return f"Alpaca not reachable: {type(e).__name__}: {str(e)[:150]}"
+
+
+def ping_once(url: str, db_path: str | Path, alpaca_problem: str | None, post=None) -> bool:
+    """One ping: success, or <url>/fail with the problems as the body."""
+    h = check(db_path, scheduler=True)
+    problems = h["problems"] + ([alpaca_problem] if alpaca_problem else [])
+    if post is None:
+        import httpx
+        post = lambda u, body: httpx.post(u, content=body.encode("utf-8"), timeout=10)  # noqa: E731
+    try:
+        post(url.rstrip("/") + ("/fail" if problems else ""), "; ".join(problems) or "ok")
+        return not problems
+    except Exception:  # noqa: BLE001 - a failed ping is exactly what the service notices
+        return False
+
+
+def start_outside_ping(db_path: str | Path, stop: threading.Event, url: str | None) -> threading.Thread | None:
+    if not url:
+        return None
+
+    def loop() -> None:
+        alpaca_problem, last_alpaca = None, 0.0
+        while not stop.is_set():
+            if time.time() - last_alpaca >= ALPACA_CHECK_EVERY:
+                alpaca_problem, last_alpaca = alpaca_reachable(), time.time()
+            ping_once(url, db_path, alpaca_problem)
+            stop.wait(PING_EVERY)
+
+    t = threading.Thread(target=loop, name="outside-ping", daemon=True)
+    t.start()
+    return t

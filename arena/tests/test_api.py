@@ -117,13 +117,15 @@ def test_admin_pause_needs_the_token(client):
     mp.setenv("ADMIN_TOKEN", "s3cret")
     assert c.post("/api/admin/pause", headers={"Authorization": "Bearer nope"}).status_code == 401
     r = c.post("/api/admin/pause", headers={"Authorization": "Bearer s3cret"})
-    assert r.status_code == 200 and r.json() == {"paused": True}
+    assert r.status_code == 200 and r.json() == {"paused": True, "paused_agents": []}
     assert c.get("/api/status").json()["paused"] is True
     conn = connect(path)
     with pytest.raises(league.LeagueError, match="paused"):
         league.execute(conn)
     conn.close()
-    assert c.post("/api/admin/resume", headers={"Authorization": "Bearer s3cret"}).json() == {"paused": False}
+    assert c.post("/api/admin/resume", headers={"Authorization": "Bearer s3cret"}).json() ==         {"paused": False, "paused_agents": []}
+    # Per agent (the kill switch for one agent); unknown agents are refused.
+    assert c.post("/api/admin/pause?agent=nobody", headers={"Authorization": "Bearer s3cret"}).status_code == 404
     mp.delenv("ADMIN_TOKEN")
 
 
