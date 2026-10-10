@@ -74,7 +74,7 @@ function renderStatus(s) {
   if (w) parts.push(`Week ${w.week_no}${w.simulate ? " (simulated)" : ""}: decided ${w.decision_date}, trades ${w.exec_date} (${w.status})`);
   const lv = state.live;
   if (lv && lv.market_open && lv.updated) parts.push(`● LIVE ${lv.updated} ET (prices refresh every 2 min)`);
-  else if (s.as_of) parts.push(`as of ${s.as_of} close`);
+  else if (s.as_of) parts.push(`as of ${s.as_of} ${s.as_of_field === "open" ? "open (today's close comes after 16:45 ET)" : "close"}`);
   if (!parts.length) parts.push("Not started yet");
   if (s.data_feed_label) parts.push(s.data_feed_label);   // e.g. "IEX feed" (ALPACA_DATA_FEED)
   document.getElementById("status-line").textContent = parts.join(" · ");

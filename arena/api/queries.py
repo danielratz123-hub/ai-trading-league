@@ -21,21 +21,41 @@ def _r(x, nd=6):
     return round(float(x), nd)
 
 
+def display_mark(conn) -> tuple[str | None, str]:
+    """(date, field) of the latest market prices the dashboard can show.
+
+    Normally the latest daily close. On a trading day after the open (once
+    the execute job has captured opening prices) and before that day's
+    close arrives, it is today's open - the price the trades filled at.
+
+    This is display only: scoring and the ledger use their own snapshots.
+    Earlier versions used the date of the latest snapshot, which froze
+    every value when a daily job failed, and on execution days asked for a
+    close that didn't exist yet (silently showing the previous close)."""
+    close_d = conn.execute("SELECT MAX(date) FROM prices WHERE ticker='SPY'").fetchone()[0]
+    open_d = conn.execute("SELECT MAX(date) FROM opening_prices WHERE ticker='SPY'").fetchone()[0]
+    if open_d and (close_d is None or open_d > close_d):
+        return open_d, "open"
+    return close_d or latest_price_date(conn), "close"
+
+
 def as_of(conn) -> str | None:
-    """The date every dashboard number refers to: the latest snapshot (normally
-    today's close). Using one date everywhere keeps comparisons honest, e.g.
-    an agent's return vs SPY over exactly the same period."""
-    d = conn.execute("SELECT MAX(date) FROM snapshots").fetchone()[0]
-    return d or latest_price_date(conn)
+    """The date every dashboard number refers to (see display_mark). Using
+    one date everywhere keeps comparisons honest, e.g. an agent's return vs
+    SPY over exactly the same period."""
+    return display_mark(conn)[0]
 
 
 def league_status(conn) -> dict:
     paused = conn.execute("SELECT value FROM league_state WHERE key='paused'").fetchone()
     week = conn.execute("SELECT * FROM weeks ORDER BY week_no DESC LIMIT 1").fetchone()
+    mark_date, mark_field = display_mark(conn)
     return {
         "paused": bool(paused and paused[0] == "1"),
         "prices_up_to": latest_price_date(conn),
-        "as_of": as_of(conn),
+        "as_of": mark_date,
+        "as_of_field": mark_field,           # "close", or "open" on a trading day before its close
+        "last_daily_snapshot": conn.execute("SELECT MAX(date) FROM snapshots WHERE kind='daily'").fetchone()[0],
         "agents": [{"id": a, "model": conn.execute("SELECT model FROM agents WHERE agent_id=?", (a,)).fetchone()[0]}
                    for a in ledger.agent_ids(conn)],
         "latest_week": dict(week) if week else None,
@@ -96,20 +116,35 @@ def _first_trade_date(conn) -> str | None:
 
 
 def scoreboard(conn) -> dict:
-    d = as_of(conn)
+    d, fld = display_mark(conn)
     start = _first_trade_date(conn)
     spy = None
     if d and start:
-        base, last = get_price(conn, "SPY", start, "open"), get_price(conn, "SPY", d, "close")
+        base, last = get_price(conn, "SPY", start, "open"), get_price(conn, "SPY", d, fld)
         spy = _r(last / base - 1) if base and last else None
     rows = []
     for row in scoring.scoreboard(conn, d) if d else []:
+        if fld == "open":
+            # Value at today's open instead of a close that doesn't exist yet.
+            row = {**row, **_open_values(conn, row["agent"], d)}
         perf = _performance(conn, row["agent"])
         since_start = perf[-1]["index"] - 1 if perf else None
         rows.append({**{k: _r(v) if isinstance(v, float) else v for k, v in row.items()},
                      "return_since_start": _r(since_start),
                      "vs_spy": _r(since_start - spy) if since_start is not None and spy is not None else None})
-    return {"as_of": d, "since": start, "spy_return": spy, "agents": rows}
+    return {"as_of": d, "as_of_field": fld, "since": start, "spy_return": spy, "agents": rows}
+
+
+def _open_values(conn, agent_id: str, d: str) -> dict:
+    """Equity and week-to-date at d's open (display only)."""
+    eq = ledger.value_agent(conn, agent_id, d, "open").equity
+    start = ledger.latest_snapshot(conn, agent_id, "post_trade")
+    wtd = None
+    if start is not None and start["equity"] > 0:
+        added = conn.execute("SELECT COALESCE(SUM(amount), 0) FROM deposits WHERE agent_id=? AND seq > ?",
+                             (agent_id, start["seq"])).fetchone()[0]
+        wtd = (eq - added) / start["equity"] - 1
+    return {"equity": eq, "week_to_date": wtd}
 
 
 def equity_curves(conn) -> dict:
@@ -144,8 +179,11 @@ def slot_curves(conn, agent_id: str) -> dict:
 # --------------------------------------------------------------------------
 
 def agent_detail(conn, agent_id: str) -> dict:
-    d = as_of(conn)
-    val = ledger.value_agent(conn, agent_id, d, "close")
+    d, fld = display_mark(conn)
+    # "last" = the latest mark (close, or today's open before the close),
+    # never the entry price. value_agent falls back to an older close only
+    # when a ticker has no bar for that date; those are flagged as stale.
+    val = ledger.value_agent(conn, agent_id, d, fld)
     eq = val.equity
     L = SETTINGS.limits
     risk = {(r["slot"], r["ticker"]): r for r in conn.execute(
@@ -158,6 +196,7 @@ def agent_detail(conn, agent_id: str) -> dict:
         holdings.append({
             "slot": p["slot"], "ticker": p["ticker"], "side": "long" if p["shares"] > 0 else "short",
             "shares": _r(p["shares"]), "avg_price": _r(p["avg_price"], 4), "last": _r(px, 4),
+            "price_stale": p["ticker"] in val.stale,
             "value": _r(v, 2), "pct_equity": _r(v / eq) if eq > 0 else None,
             "unrealized_pnl": _r((px - p["avg_price"]) * p["shares"], 2),
             "stop_loss": r["stop_loss"] if r else None, "take_profit": r["take_profit"] if r else None,
@@ -192,7 +231,7 @@ def agent_detail(conn, agent_id: str) -> dict:
         gauge("Largest short", max(-shortest[1], 0) / eq, L.max_short_per_ticker, L.forced_cover_single_short,
               ticker=shortest[0] if shortest[1] < 0 else None),
     ]
-    return {"agent": agent_id, "as_of": d, "equity": _r(eq, 2), "cash": _r(val.cash, 2),
+    return {"agent": agent_id, "as_of": d, "as_of_field": fld, "equity": _r(eq, 2), "cash": _r(val.cash, 2),
             "long_value": _r(val.long_value, 2), "short_value": _r(val.short_value, 2),
             "slots": slots, "holdings": holdings, "exposures": exposures,
             "recent_trades": trades(conn, agent_id, limit=20), "costs": cost_totals(conn, agent_id)}

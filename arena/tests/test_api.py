@@ -160,3 +160,44 @@ def test_healthz_and_health_command(client, tmp_path):
     missing = tmp_path / "nope" / "arena.db"
     assert subprocess.run([sys.executable, "-m", "arena.main", "health", "--db", str(missing)],
                           capture_output=True).returncode == 1
+
+
+def test_holdings_show_the_latest_mark_not_a_stale_close(tmp_path):
+    """Regression: the dashboard froze when a daily job failed, and on an
+    execution day showed the previous close until 16:45."""
+    import json as _json
+
+    import pandas as pd
+
+    from arena import ledger, prices
+    from arena.api import queries
+    from arena.ledger import SlotTarget
+    conn = connect(tmp_path / "a.db")
+    df = _market()
+    conn.executemany("INSERT INTO prices VALUES (?,?,?,?,?,?,?)", df.itertuples(index=False))
+    store_days(conn, [(d, "09:30", "16:00") for d in sorted(df["date"].unique())])
+    d = "2024-04-01"
+    prev_close = conn.execute("SELECT close FROM prices WHERE ticker='MSFT' AND date<? ORDER BY date DESC LIMIT 1",
+                              (d,)).fetchone()[0]
+    conn.execute("DELETE FROM prices WHERE date >= ?", (d,))           # morning: no daily bar for today yet
+    ledger.create_agent(conn, "claude", 1000, "2024-03-28")
+    conn.execute("INSERT INTO weeks(week_no, decision_date, exec_date, status) VALUES (1, '2024-03-28', ?, 'decided')", (d,))
+    conn.execute("INSERT INTO pending_orders(agent_id, created_date, exec_date, kind, payload) VALUES "
+                 "('claude', '2024-03-28', ?, 'rebalance', ?)", (d, _json.dumps([SlotTarget(1, 1.0, {"MSFT": 0.25}).__dict__])))
+    prices.store_opening_prices(conn, pd.DataFrame({"ticker": ["SPY", "MSFT"], "open": [500.0, 400.0]}), d, "test")
+    league.run_open(conn, d)
+
+    h = queries.agent_detail(conn, "claude")["holdings"][0]
+    assert (h["last"], queries.display_mark(conn)) == (400.0, (d, "open"))     # today's open, not prev_close
+    assert h["last"] != prev_close and not h["price_stale"]
+    assert queries.scoreboard(conn)["as_of_field"] == "open"
+
+    # After the daily job stores today's bar, the close is shown.
+    conn.execute("INSERT INTO prices VALUES ('MSFT', ?, 400, 420, 395, 410, 1e6), ('SPY', ?, 500, 505, 499, 503, 1e6)", (d, d))
+    h = queries.agent_detail(conn, "claude")["holdings"][0]
+    assert h["last"] == 410.0 and queries.display_mark(conn) == (d, "close")
+
+    # Prices for a later day without a daily snapshot (the daily job failed
+    # after downloading prices) still move the dashboard forward.
+    conn.execute("INSERT INTO prices VALUES ('MSFT', '2024-04-02', 410, 430, 405, 425, 1e6), ('SPY', '2024-04-02', 503, 510, 502, 508, 1e6)")
+    assert queries.agent_detail(conn, "claude")["holdings"][0]["last"] == 425.0
