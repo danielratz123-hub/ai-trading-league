@@ -44,9 +44,26 @@ jobs:
         env:
           KEY: ${{ secrets.VPS_SSH_KEY }}
           KNOWN: ${{ secrets.VPS_KNOWN_HOSTS }}
+          HOST: ${{ secrets.VPS_HOST }}
+          USER_: ${{ secrets.VPS_USER }}
         run: |
+          set -eu
+          for v in KEY KNOWN HOST USER_; do
+            [ -n "$(printenv $v)" ] || { echo "Secret for $v is empty or missing (repo Settings -> Secrets -> Actions)."; exit 1; }
+          done
+          HOST=$(printf '%s' "$HOST" | tr -d '[:space:]'); USER_=$(printf '%s' "$USER_" | tr -d '[:space:]')
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "$KEY" > ~/.ssh/id_deploy && chmod 600 ~/.ssh/id_deploy
-          printf '%s\n' "$KNOWN" > ~/.ssh/known_hosts
+          # Pasted on Windows the key may carry CR characters; OpenSSH rejects those.
+          printf '%s
+' "$KEY" | tr -d '' > ~/.ssh/id_deploy && chmod 600 ~/.ssh/id_deploy
+          printf '%s
+' "$KNOWN" | tr -d '' > ~/.ssh/known_hosts
+          if ! ssh-keygen -y -f ~/.ssh/id_deploy > /dev/null 2>&1; then
+            echo "VPS_SSH_KEY is not a valid private key: paste ALL lines, from -----BEGIN to -----END."; exit 1
+          fi
+          echo "Key fingerprint (must be SHA256:pTqLM4adDNQblq1MLI5Dy2Ofh9AVM+6qPrs5AeckgdY):"
+          ssh-keygen -lf ~/.ssh/id_deploy
+          echo "Deploying ${{ github.sha }} to $USER_@$HOST"
           # The server allows this key to run only scripts/deploy.sh (forced command).
-          ssh -i ~/.ssh/id_deploy ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} "${{ github.sha }}"
+          ssh -i ~/.ssh/id_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=30 \
+            "$USER_@$HOST" "${{ github.sha }}"
