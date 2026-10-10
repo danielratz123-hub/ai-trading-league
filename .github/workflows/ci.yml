@@ -39,7 +39,6 @@ jobs:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    environment: production
     steps:
       - name: Deploy over SSH
         env:

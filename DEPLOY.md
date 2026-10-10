@@ -547,8 +547,7 @@ version is unhealthy, Telegram either way). One-time setup:
    ```
    Plus secrets `VPS_HOST` (the IP) and `VPS_USER` (`daniel`), in the repo's
    Settings -> Secrets and variables -> Actions.
-4. In the repo's Settings -> Environments, create `production` (optionally
-   with required reviewers, to approve each deploy).
+4. Keep the repository private (Settings -> General -> Danger Zone).
 
 A deploy that waited too long (a long agent turn) exits without changing
 anything; re-run it with Actions -> CI -> Run workflow.
