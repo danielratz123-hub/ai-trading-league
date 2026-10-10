@@ -72,9 +72,7 @@ function renderStatus(s) {
   const w = s.latest_week;
   const parts = [];
   if (w) parts.push(`Week ${w.week_no}${w.simulate ? " (simulated)" : ""}: decided ${w.decision_date}, trades ${w.exec_date} (${w.status})`);
-  const lv = state.live;
-  if (lv && lv.market_open && lv.updated) parts.push(`● LIVE ${lv.updated} ET (prices refresh every 2 min)`);
-  else if (s.as_of) parts.push(`as of ${s.as_of} ${s.as_of_field === "open" ? "open (today's close comes after 16:45 ET)" : "close"}`);
+  if (s.as_of) parts.push(`as of ${s.as_of} ${s.as_of_field === "open" ? "open (today's close comes after 16:45 ET)" : "close"}`);
   if (!parts.length) parts.push("Not started yet");
   if (s.data_feed_label) parts.push(s.data_feed_label);   // e.g. "IEX feed" (ALPACA_DATA_FEED)
   document.getElementById("status-line").textContent = parts.join(" · ");
@@ -99,7 +97,7 @@ function renderScoreboard(sb) {
       <div class="who"><span class="swatch" style="background:var(${agentVar(a.agent)})"></span>${esc(label(a.agent))}
         ${a.points === leader && a.points > 0 && sb.agents.filter(x => x.points === leader).length === 1 ? '<span class="badge badge-good">leading</span>' : ""}</div>
       <div class="points"><b>${a.points}</b> point${a.points === 1 ? "" : "s"}</div>
-      <div class="hero">${money(a.equity)}${l ? ' <span class="badge badge-good live">● live</span>' : ""}</div>
+      <div class="hero"><span data-equity="${esc(row.agent)}">${money(a.equity)}</span>${l ? ' <span class="badge badge-good live">estimated</span>' : ""}</div>
       <dl class="stats">
         ${l ? `<dt>Since ${esc(l.since_snapshot === new Date().toISOString().slice(0, 10) ? "this morning's trades" : "last close")}</dt><dd class="${signClass(l.change_since_last_snapshot)}">${pct(l.change_since_last_snapshot)}</dd>` : ""}
         <dt>Return since start</dt><dd class="${signClass(a.return_since_start)}">${pct(a.return_since_start)}</dd>
@@ -307,10 +305,10 @@ function renderAgent(el, d, slotCurves) {
                                  pct_equity: lp.value / lvAgent.equity });
     }
   }
-  const holdingRows = side => d.holdings.filter(h => h.side === side).map(h => `<tr>
+  const holdingRows = side => d.holdings.filter(h => h.side === side).map(h => `<tr data-tk="${esc(h.ticker)}" data-shares="${h.shares}" data-avg="${h.avg_price}">
       <td>${esc(h.ticker)}</td><td class="num">${h.slot}</td><td class="num">${h.shares}</td>
-      <td class="num">${Number(h.avg_price).toFixed(2)}</td><td class="num">${Number(h.last).toFixed(2)}</td><td class="num">${money(h.value)}</td>
-      <td class="num">${pct(h.pct_equity)}</td><td class="num ${signClass(h.unrealized_pnl)}">${money(h.unrealized_pnl)}</td>
+      <td class="num">${Number(h.avg_price).toFixed(2)}</td><td class="num" data-cell="last">${Number(h.last).toFixed(2)}</td><td class="num" data-cell="value">${money(h.value)}</td>
+      <td class="num">${pct(h.pct_equity)}</td><td class="num ${signClass(h.unrealized_pnl)}" data-cell="pnl">${money(h.unrealized_pnl)}</td>
       <td class="num">${h.stop_loss ?? "–"}</td><td class="num">${h.take_profit ?? "–"}</td></tr>`).join("")
       || `<tr><td colspan="10" class="muted">None</td></tr>`;
   const hHead = `<tr><th>Ticker</th><th class="num">Slot</th><th class="num">Shares</th><th class="num">Avg</th><th class="num">${lvAgent ? "Live" : "Last"}</th><th class="num">Value</th><th class="num">% equity</th><th class="num">Unrealized</th><th class="num">Stop</th><th class="num">Take profit</th></tr>`;
@@ -580,6 +578,36 @@ async function checkControl() {
   return controlAvailable;
 }
 
+// ------------------------------------------------------------------ live prices (display only)
+
+const feed = new LiveFeed({
+  onStatus: s => {
+    const pill = document.getElementById("live-pill");
+    const close = state.status?.as_of ? `${state.status.as_of} ${state.status.as_of_field || "close"}` : null;
+    pill.textContent = LiveFeed.pillText(s, close);
+    pill.className = "pill " + (s.status === "live" ? "pill-live" : "pill-off");
+  },
+  onPrices: (changes, quotes) => {
+    if (!(state.live && state.live.market_open)) return;
+    // Holdings cells of the open agent tab.
+    for (const [t, { price, prev }] of Object.entries(changes)) {
+      document.querySelectorAll(`tr[data-tk="${CSS.escape(t)}"]`).forEach(tr => {
+        const sh = Number(tr.dataset.shares), avg = Number(tr.dataset.avg);
+        const set = (cell, text, cls) => { const c = tr.querySelector(`[data-cell="${cell}"]`); if (c) { c.textContent = text; if (cls != null) c.className = "num " + cls; return c; } };
+        LiveFeed.flash(set("last", price.toFixed(2)), prev == null || price >= prev);
+        set("value", money(sh * price));
+        set("pnl", money((price - avg) * sh), signClass((price - avg) * sh));
+      });
+    }
+    // Estimated equity per agent: cash + positions at live prices.
+    for (const [id, a] of Object.entries(state.live.agents || {})) {
+      const eq = a.cash + a.positions.reduce((s, p) => s + p.shares * (quotes[p.ticker] ?? p.last), 0);
+      const el = document.querySelector(`[data-equity="${CSS.escape(id)}"]`);
+      if (el && el.textContent !== money(eq)) { LiveFeed.flash(el, eq >= (a.equity ?? eq)); el.textContent = money(eq); }
+    }
+  },
+});
+
 async function refresh() {
   try {
     await checkControl();
@@ -610,3 +638,4 @@ async function refresh() {
 
 refresh();
 setInterval(refresh, 60_000);
+feed.start();

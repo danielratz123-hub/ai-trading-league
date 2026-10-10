@@ -522,6 +522,7 @@ def live_snapshot(conn, live: dict) -> dict:
     from datetime import datetime
     from ..prices import ET, price_on_or_before
     out = {"enabled": live.get("enabled", False), "market_open": live.get("market_open", False),
+           "status": live.get("status"), "label": live.get("label"), "as_of": live.get("as_of"),
            "updated": live.get("updated"), "feed": live.get("feed"), "error": live.get("error"), "agents": {}}
     if not out["market_open"] or not live.get("quotes"):
         return out
@@ -543,12 +544,14 @@ def live_snapshot(conn, live: dict) -> dict:
             v = p["shares"] * last
             value += v
             positions.append({"slot": p["slot"], "ticker": p["ticker"], "last": _r(last, 4), "value": _r(v, 2),
+                              "shares": _r(p["shares"]), "avg_price": _r(p["avg_price"], 4),
                               "unrealized_pnl": _r((last - p["avg_price"]) * p["shares"], 2)})
         equity = cash + value
         base = ledger.latest_snapshot(conn, a)
         change = equity / base["equity"] - 1 if base and base["equity"] > 0 else None
         since = _chain_index(conn, a) * (1 + change) - 1 if change is not None else None
-        out["agents"][a] = {"equity": _r(equity, 2), "change_since_last_snapshot": _r(change),
+        out["agents"][a] = {"equity": _r(equity, 2), "estimated": True, "cash": _r(cash, 2),
+                            "change_since_last_snapshot": _r(change),
                             "since_snapshot": base["date"] if base else None,
                             "return_since_start": _r(since), "positions": positions}
     start = _first_trade_date(conn)

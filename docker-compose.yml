@@ -99,6 +99,7 @@ services:
     environment:
       <<: *server-env
       AUTOSTART_SCHEDULER: "0"         # the engine service runs the scheduler
+      ARENA_LIVE: "0"                  # Alpaca allows ONE stream connection: the api service has it
     volumes:
       - arena-data:/app/data
       - claude-home:/home/arena/.claude

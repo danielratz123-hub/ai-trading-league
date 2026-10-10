@@ -220,3 +220,13 @@ td.why { min-width: 220px; max-width: 420px; color: var(--ink-2); font-size: 0.8
 /* Web searches side by side */
 .bar-cell { display: flex; align-items: center; gap: 8px; min-width: 140px; }
 .bar-cell .bar { height: 8px; border-radius: 4px; min-width: 2px; opacity: 0.85; }
+
+/* Live price status pill + flashes */
+.pill { font-size: 0.78rem; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); white-space: nowrap; color: var(--ink-2); }
+.pill-live { color: var(--good); border-color: currentColor; }
+.pill-live::before { content: "● "; }
+@keyframes flash-up { from { background: color-mix(in srgb, var(--good) 35%, transparent); } to { background: transparent; } }
+@keyframes flash-down { from { background: color-mix(in srgb, var(--bad) 35%, transparent); } to { background: transparent; } }
+.flash-up { animation: flash-up 0.9s ease-out; border-radius: 4px; }
+.flash-down { animation: flash-down 0.9s ease-out; border-radius: 4px; }
+@media (prefers-reduced-motion: reduce) { .flash-up, .flash-down { animation: none; } }

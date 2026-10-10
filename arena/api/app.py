@@ -9,13 +9,14 @@ dashboard password is set, and always on the server (see auth.py).
 from __future__ import annotations
 
 import hmac
+import json
 import os
 import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Iterator
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -70,8 +71,8 @@ async def lifespan(app: FastAPI):
         alerts.send("Dashboard (api) started. If you didn't restart it, the server or container restarted.",
                     level="info", key="api-start", every=timedelta(minutes=10))
     control.autostart_scheduler()
-    live.LIVE = live.LivePrices(db_path)
-    live.LIVE.start()              # live prices for the dashboard, market hours only
+    live.LIVE = live.LiveStream(db_path)
+    live.LIVE.start()              # one Alpaca WebSocket, market hours only (display only)
     yield
     live.LIVE.stop()
     control.SCHEDULER.stop()       # the scheduler lives as long as this app
@@ -151,6 +152,31 @@ def create_app() -> FastAPI:
     def live_values(conn=Depends(read_conn)):
         state = live.LIVE.state() if live.LIVE else {"enabled": False, "market_open": False}
         return queries.live_snapshot(conn, state)
+
+    @app.get("/api/stream")
+    async def stream(request: Request):
+        """Server-Sent Events: a 'snapshot' first, then 'prices' batches (at most
+        one a second) and 'status' changes. Ticker/price pairs only: the
+        browser never sees Alpaca or a key. Behind the login like all /api."""
+        import asyncio
+
+        from fastapi.responses import StreamingResponse
+        src = live.LIVE
+        loop = asyncio.get_running_loop()
+        q: asyncio.Queue = asyncio.Queue(maxsize=200)
+        if src is not None:
+            src.hub.add(loop, q)
+
+        async def events():
+            try:
+                async for chunk in live.sse_events(src, q, request.is_disconnected):
+                    yield chunk
+            finally:
+                if src is not None:
+                    src.hub.remove(loop, q)
+
+        return StreamingResponse(events(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     @app.get("/api/reports")
     def strategy_reports(conn=Depends(read_conn)):
