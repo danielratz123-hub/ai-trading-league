@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>AI Trading League</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <h1>AI Trading League</h1>
+      <p id="status-line" class="muted">Loading…</p>
+    </div>
+    <div class="top-actions">
+      <span id="live-pill" class="pill" aria-live="polite">…</span>
+      <span id="paused-badge" class="badge badge-critical" hidden>⏸ Paused</span>
+      <a class="button-link" href="/">← New dashboard</a>
+      <a id="setup-link" class="button-link" href="setup.html" hidden>⚙ Setup</a>
+      <button id="admin-btn" class="ghost" type="button">Admin</button>
+      <button id="theme-btn" class="ghost" type="button" aria-label="Toggle dark mode">◐</button>
+    </div>
+  </header>
+
+  <main class="page">
+    <p id="error" class="error" role="alert" hidden></p>
+    <p id="welcome" class="banner" hidden>👋 Welcome! The league hasn't started yet.
+      <a href="setup.html">Open Setup</a> to connect your accounts and start it.</p>
+
+    <section aria-labelledby="sb-title">
+      <h2 id="sb-title" class="visually-hidden">Scoreboard</h2>
+      <div id="scoreboard" class="cards"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="eq-title">
+      <div class="panel-head">
+        <h2 id="eq-title">Equity</h2>
+        <div class="segmented" role="group" aria-label="Chart mode">
+          <button type="button" data-mode="equity" class="on">$ Equity</button>
+          <button type="button" data-mode="index">% Performance</button>
+        </div>
+      </div>
+      <p class="muted small" id="eq-note"></p>
+      <div id="eq-legend" class="legend"></div>
+      <div class="chart-box"><canvas id="eq-chart" aria-label="Daily equity of both agents and SPY"></canvas></div>
+      <details class="table-view"><summary>Show data table</summary><div id="eq-table" class="scroll"></div></details>
+    </section>
+
+    <nav class="tabs" id="tabs" role="tablist"></nav>
+    <div id="tab-panels"></div>
+  </main>
+
+  <dialog id="admin-dialog">
+    <form method="dialog" id="admin-form">
+      <h2>Admin</h2>
+      <p class="muted small">Pausing stops <code>decide</code> and <code>execute</code>. Daily risk checks keep running.</p>
+      <label>Admin token <input type="password" id="admin-token" autocomplete="off"></label>
+      <p id="admin-msg" class="small"></p>
+      <div class="row">
+        <button type="button" id="pause-btn">Pause league</button>
+        <button type="button" id="resume-btn">Resume league</button>
+        <button value="close" class="ghost">Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="live.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

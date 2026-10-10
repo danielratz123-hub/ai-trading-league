@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from .. import health, league, ledger
 from ..config import SETTINGS
 from ..db import connect
-from . import auth, control, live, queries
+from . import auth, control, live, queries, v3
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
@@ -181,6 +181,23 @@ def create_app() -> FastAPI:
     @app.get("/api/reports")
     def strategy_reports(conn=Depends(read_conn)):
         return {"weeks": queries.reports(conn), "preserve": queries.preserve_repeats(conn)}
+
+    # ---- V3 dashboard (read-only) ----
+    @app.get("/api/overview")
+    def overview(conn=Depends(read_conn)):
+        return v3.overview(conn)
+
+    @app.get("/api/strategies/{agent_id}")
+    def strategies(agent_id: str, conn=Depends(read_conn)):
+        return v3.strategies(conn, _agent(conn, agent_id))
+
+    @app.get("/api/reasoning/{agent_id}")
+    def reasoning(agent_id: str, conn=Depends(read_conn)):
+        return v3.reasoning(conn, _agent(conn, agent_id))
+
+    @app.get("/api/closed-trades")
+    def closed_trades(limit: int = Query(100, ge=1, le=500), conn=Depends(read_conn)):
+        return v3.closed_trades(conn, limit)
 
     @app.get("/api/costs")
     def costs(conn=Depends(read_conn)):

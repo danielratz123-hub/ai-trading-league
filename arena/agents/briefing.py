@@ -43,7 +43,7 @@ TIMING AND SCORING
 
 HOW TO WORK THIS TURN
 - Use the research tools as you see fit within your budget (shown in the briefing). Data tools only return data up to the decision date.
-- Finish by calling submit_decision exactly once with your final decision. Every slot needs a short reason, and give a one-line reason for each position in position_reasons (shown next to your trades on the public dashboard). If the engine rejects it, fix the listed problems and resubmit.
+- Finish by calling submit_decision exactly once with your final decision. Every slot needs a short reason, and give a one-line reason for each position in position_reasons (shown next to your trades on the public dashboard). When you close a position completely, say why in one line in exit_reasons (shown as "why it closed"). If the engine rejects it, fix the listed problems and resubmit.
 - Write anything you want to remember in notes_to_self; you'll see it next week."""
 
 

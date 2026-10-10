@@ -275,6 +275,7 @@ class SlotTarget:
     risk_orders: dict[str, dict] = field(default_factory=dict)
     reason: str = ""                                        # the agent's reason for the slot
     notes: dict[str, str] = field(default_factory=dict)     # the agent's reason per position
+    exits: dict[str, str] = field(default_factory=dict)     # the agent's reason for closing a position
 
 
 @dataclass
@@ -350,13 +351,14 @@ def rebalance(conn: sqlite3.Connection, agent_id: str, d: str, targets: list[Slo
         # 4) Cash-freeing trades (sell longs, open shorts) before cash-using
         #    ones, like a real account would have to.
         orders.sort(key=lambda o: (o[2] > 0, o[0], o[1]))
+        exits = {k: v for t in targets for k, v in (t.exits or {}).items()}
         trades = []
         for s, ticker, delta, price in orders:
             # Cap buys that add long exposure; covering a short must always complete.
             if delta > 0 and position_shares(conn, agent_id, s, ticker) >= 0:
                 delta = affordable(conn, agent_id, s, delta, price)
             tr = execute_trade(conn, agent_id, s, ticker, delta, d, price, reason,
-                               trade_note(by_slot.get(s), ticker))
+                               trade_note(by_slot.get(s), ticker, exits))
             if tr:
                 trades.append(tr)
 
@@ -384,8 +386,11 @@ def affordable(conn: sqlite3.Connection, agent_id: str, slot: int, shares: float
     return max(0.0, cash - costs.commission(fitted, fill)) / fill
 
 
-def trade_note(target: SlotTarget | None, ticker: str) -> str:
+def trade_note(target: SlotTarget | None, ticker: str, exits: dict[str, str] | None = None) -> str:
     """Why a rebalance trade happened, in the agent's own words when it gave them."""
+    closing = target is None or ticker not in target.weights or not target.weights.get(ticker)
+    if closing and exits and exits.get(ticker):
+        return exits[ticker]
     if target is None:
         return "Slot closed: no longer part of the plan."
     if ticker not in target.weights or not target.weights.get(ticker):

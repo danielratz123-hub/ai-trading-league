@@ -4,68 +4,151 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
-  <title>AI Trading League</title>
-  <link rel="stylesheet" href="style.css">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <meta name="theme-color" content="#000000">
+  <title>databasedstrategy · AI Trading League</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="v3.css">
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <h1>AI Trading League</h1>
-      <p id="status-line" class="muted">Loading…</p>
-    </div>
-    <div class="top-actions">
-      <span id="live-pill" class="pill" aria-live="polite">…</span>
-      <span id="paused-badge" class="badge badge-critical" hidden>⏸ Paused</span>
-      <a id="setup-link" class="button-link" href="setup.html" hidden>⚙ Setup</a>
-      <button id="admin-btn" class="ghost" type="button">Admin</button>
-      <button id="theme-btn" class="ghost" type="button" aria-label="Toggle dark mode">◐</button>
-    </div>
-  </header>
+  <a class="skip" href="#live">Skip to content</a>
 
-  <main class="page">
-    <p id="error" class="error" role="alert" hidden></p>
-    <p id="welcome" class="banner" hidden>👋 Welcome! The league hasn't started yet.
-      <a href="setup.html">Open Setup</a> to connect your accounts and start it.</p>
-
-    <section aria-labelledby="sb-title">
-      <h2 id="sb-title" class="visually-hidden">Scoreboard</h2>
-      <div id="scoreboard" class="cards"></div>
-    </section>
-
-    <section class="panel" aria-labelledby="eq-title">
-      <div class="panel-head">
-        <h2 id="eq-title">Equity</h2>
-        <div class="segmented" role="group" aria-label="Chart mode">
-          <button type="button" data-mode="equity" class="on">$ Equity</button>
-          <button type="button" data-mode="index">% Performance</button>
-        </div>
+  <!-- 1. Sticky frosted-glass nav -->
+  <nav class="nav" aria-label="Main">
+    <div class="wrap nav-in">
+      <a class="brand" href="#live">
+        <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l5-5 4 4 8-9"/></svg>
+        <span>databasedstrategy</span>
+      </a>
+      <div class="nav-links">
+        <a href="#live" aria-current="true">Live</a>
+        <a href="#board">Leaderboard</a>
+        <a href="#play">Strategies</a>
+        <a href="#trades">Trades</a>
       </div>
-      <p class="muted small" id="eq-note"></p>
-      <div id="eq-legend" class="legend"></div>
-      <div class="chart-box"><canvas id="eq-chart" aria-label="Daily equity of both agents and SPY"></canvas></div>
-      <details class="table-view"><summary>Show data table</summary><div id="eq-table" class="scroll"></div></details>
+      <div class="status" aria-live="polite">
+        <span class="dot-wrap" aria-hidden="true"><span class="dot-ping" id="status-ping" hidden></span><span class="dot" id="status-dot"></span></span>
+        <span class="m" id="status-text">Loading…</span>
+      </div>
+    </div>
+  </nav>
+
+  <!-- 2. Scrolling ticker of held stocks -->
+  <div class="marquee-wrap" aria-label="Positions held by the agents">
+    <div class="marquee" id="ticker"></div>
+  </div>
+
+  <main>
+    <p id="error" class="error wrap" role="alert" hidden></p>
+
+    <!-- 3 + 4. Headline, equity tiles, chart -->
+    <header id="live" class="wrap hero">
+      <div class="hero-text">
+        <span class="rise m eyebrow" id="eyebrow">LIVE PAPER LEAGUE</span>
+        <h1 class="rise" style="animation-delay:80ms">Two AIs. <span class="dim">$1,000 each.</span> One market.</h1>
+        <p class="rise lede" style="animation-delay:160ms">Claude and GPT research, build and run their own strategies. Every trade, every reason, out in the open.</p>
+      </div>
+      <div class="tiles" id="tiles"></div>
+      <section class="card chart-card rise" style="animation-delay:420ms" aria-labelledby="eq-h">
+        <div class="chart-head">
+          <div>
+            <h2 id="eq-h">Equity</h2>
+            <span class="sub">Hover the chart to scrub through each day</span>
+          </div>
+          <div role="group" aria-label="Time range" class="ranges" id="ranges">
+            <button type="button" class="pill-btn" data-range="1W" aria-pressed="false">1 week</button>
+            <button type="button" class="pill-btn" data-range="ALL" aria-pressed="true">Since start</button>
+          </div>
+        </div>
+        <div class="chart" id="chart" role="img" aria-label="Equity of Claude, GPT and SPY over time"></div>
+        <div class="axis m" id="axis"></div>
+        <div class="legend">
+          <span><i class="sw" style="background:var(--claude)"></i>Claude</span>
+          <span><i class="sw" style="background:var(--gpt)"></i>GPT</span>
+          <span><i class="sw dashed"></i>SPY (same $1,000)</span>
+        </div>
+      </section>
+    </header>
+
+    <!-- 5. Leaderboard -->
+    <section id="board" class="wrap section sr" aria-labelledby="board-h">
+      <div class="section-head">
+        <h2 id="board-h">Leaderboard</h2>
+        <span class="sub" id="board-sub">1 point per weekly win</span>
+      </div>
+      <div class="card table-card"><div class="scroll">
+        <table class="tbl" style="min-width:820px">
+          <thead><tr class="m">
+            <th class="pl">RANK</th><th>AGENT</th><th class="r">EQUITY</th><th class="r">TOTAL</th><th class="r">THIS WEEK</th>
+            <th class="r">POINTS</th><th class="r">WIN RATE</th><th class="pr">BEST STRATEGY</th>
+          </tr></thead>
+          <tbody id="board-body"></tbody>
+        </table>
+      </div></div>
     </section>
 
-    <nav class="tabs" id="tabs" role="tablist"></nav>
-    <div id="tab-panels"></div>
+    <!-- 6. Strategies: light band -->
+    <section id="play" class="band" aria-labelledby="play-h">
+      <div class="wrap band-in">
+        <div class="sr band-head">
+          <span class="m eyebrow light">HOW THEY'RE PLAYING IT</span>
+          <h2 id="play-h">Their strategies. One budget.</h2>
+          <div role="group" aria-label="Choose agent" class="switch" id="switch">
+            <span class="switch-ind" aria-hidden="true" id="switch-ind"></span>
+            <button type="button" data-agent="claude" aria-pressed="true">Claude</button>
+            <button type="button" data-agent="gpt" aria-pressed="false">GPT</button>
+          </div>
+        </div>
+        <div class="swap" id="strategies"></div>
+      </div>
+    </section>
+
+    <!-- 7 + 8. Positions, reasoning, risk gauges -->
+    <section class="wrap section" aria-labelledby="pos-h">
+      <div class="section-head sr">
+        <h2 id="pos-h"><span id="pos-agent">Claude</span> positions</h2>
+        <span class="m sub small" id="pos-note"></span>
+      </div>
+      <div class="pos-row sr">
+        <div class="card table-card swap" id="pos-wrap"><div class="scroll">
+          <table class="tbl" style="min-width:640px">
+            <thead><tr class="m">
+              <th class="pl">TICKER</th><th>SIDE</th><th class="r">QTY</th><th class="r">ENTRY</th><th class="r">LAST</th><th class="r">VALUE</th><th class="r pr">P&amp;L</th>
+            </tr></thead>
+            <tbody id="pos-body"></tbody>
+          </table>
+        </div></div>
+        <aside class="reason glow swap" id="reason" aria-label="Agent reasoning"></aside>
+      </div>
+      <div class="gauges sr swap" id="gauges"></div>
+    </section>
+
+    <!-- 9. Completed trades -->
+    <section id="trades" class="wrap section sr" aria-labelledby="tr-h">
+      <div class="section-head">
+        <h2 id="tr-h">Completed trades</h2>
+        <span class="sub">Both agents · newest first · after fees</span>
+      </div>
+      <div class="card table-card"><div class="scroll">
+        <table class="tbl" style="min-width:880px">
+          <thead><tr class="m">
+            <th class="pl">CLOSED</th><th>AGENT</th><th>TICKER</th><th>SIDE</th><th class="r">ENTRY → EXIT</th><th class="r">HELD</th><th class="r">NET P&amp;L</th><th class="pr">WHY IT CLOSED</th>
+          </tr></thead>
+          <tbody id="closed-body"></tbody>
+        </table>
+      </div></div>
+    </section>
   </main>
 
-  <dialog id="admin-dialog">
-    <form method="dialog" id="admin-form">
-      <h2>Admin</h2>
-      <p class="muted small">Pausing stops <code>decide</code> and <code>execute</code>. Daily risk checks keep running.</p>
-      <label>Admin token <input type="password" id="admin-token" autocomplete="off"></label>
-      <p id="admin-msg" class="small"></p>
-      <div class="row">
-        <button type="button" id="pause-btn">Pause league</button>
-        <button type="button" id="resume-btn">Resume league</button>
-        <button value="close" class="ghost">Close</button>
-      </div>
-    </form>
-  </dialog>
+  <footer class="foot">
+    <div class="wrap foot-in m">
+      <span>decide Sat 10:00 · execute Mon 09:50 open · mark after every close (ET)</span>
+      <span><a href="classic.html">Timeline, reports, costs &amp; admin</a> · <a href="setup.html" id="setup-link" hidden>Setup</a> · paper money · read-only</span>
+    </div>
+  </footer>
 
   <script src="live.js"></script>
-  <script src="app.js"></script>
+  <script src="v3.js"></script>
 </body>
 </html>

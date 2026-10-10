@@ -60,6 +60,10 @@ SUBMIT_SPEC = {
                 },
             },
             "notes_to_self": {"type": "string", "description": "Anything to remember next week."},
+            "exit_reasons": {
+                "type": "object", "additionalProperties": {"type": "string"},
+                "description": "Optional. {ticker: one line on why you are closing it completely this "
+                               "week}. Shown on the dashboard as 'why it closed'."},
         },
         "required": ["market_view", "slots", "notes_to_self"],
     },
@@ -129,6 +133,15 @@ def parse(raw) -> tuple[list[dict], list[str]]:
     return out, errors
 
 
+def exit_reasons(raw) -> dict[str, str]:
+    """Optional {ticker: why it's being closed}; anything malformed is ignored
+    (it's only a note, never a reason to reject a decision)."""
+    ex = raw.get("exit_reasons") if isinstance(raw, dict) else None
+    if not isinstance(ex, dict):
+        return {}
+    return {str(k).upper().strip(): str(v).strip()[:300] for k, v in ex.items() if str(v).strip()}
+
+
 def _rejected(errors: list[str], targets=None, runs=None) -> Checked:
     return Checked(False, "Your decision was REJECTED:\n" + "\n".join(f"  - {e}" for e in errors),
                    targets or [], runs or [], errors)
@@ -141,17 +154,20 @@ def check(ctx: ResearchContext, raw: dict) -> Checked:
         return _rejected(errors)
 
     conn = ctx.conn
+    exits = exit_reasons(raw)
     targets, runs, code_errors = [], [], []
     for s in slots:
         if s["type"] == "manual":
             targets.append(SlotTarget(s["slot"], s["allocation"], s["positions"], s["name"], "manual",
-                                      risk_orders=s["risk_orders"], reason=s["reason"], notes=s["notes"]))
+                                      risk_orders=s["risk_orders"], reason=s["reason"], notes=s["notes"],
+                                      exits=exits))
             continue
         weights, err = run_code_slot(ctx, s["slot"])
         runs.append({"slot": s["slot"], "ok": err is None, "weights": weights, "error": err})
         if err is None:
             targets.append(SlotTarget(s["slot"], s["allocation"], weights, s["name"], "code",
-                                      risk_orders=s["risk_orders"], reason=s["reason"], notes=s["notes"]))
+                                      risk_orders=s["risk_orders"], reason=s["reason"], notes=s["notes"],
+                                      exits=exits))
         else:
             # A crashing code slot is a validation error: the agent must fix it.
             code_errors.append(f"Slot {s['slot']}: your strategy code failed at the decision date. Fix it "

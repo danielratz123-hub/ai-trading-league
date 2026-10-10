@@ -189,12 +189,14 @@ def agent_detail(conn, agent_id: str) -> dict:
     risk = {(r["slot"], r["ticker"]): r for r in conn.execute(
         "SELECT * FROM risk_orders WHERE agent_id=?", (agent_id,))}
     holdings = []
+    slot_names = {r["slot"]: r["name"] for r in conn.execute("SELECT slot, name FROM slots WHERE agent_id=?", (agent_id,))}
     for p in ledger.positions(conn, agent_id):
         px = val.prices[p["ticker"]]
         v = p["shares"] * px
         r = risk.get((p["slot"], p["ticker"]))
         holdings.append({
-            "slot": p["slot"], "ticker": p["ticker"], "side": "long" if p["shares"] > 0 else "short",
+            "slot": p["slot"], "strategy": slot_names.get(p["slot"]) or f"Slot {p['slot']}",
+            "ticker": p["ticker"], "side": "long" if p["shares"] > 0 else "short",
             "shares": _r(p["shares"]), "avg_price": _r(p["avg_price"], 4), "last": _r(px, 4),
             "price_stale": p["ticker"] in val.stale,
             "value": _r(v, 2), "pct_equity": _r(v / eq) if eq > 0 else None,
