@@ -526,7 +526,9 @@ function renderResearch(el, research, costs) {
 function renderMirror(el, m) {
   const ids = (state.status?.agents || []).map(a => a.id);
   const modeText = { combined: "Both AIs share one Alpaca paper account. Alpaca shows the totals; this page shows whose part is whose.",
-                     each: "Each AI has its own Alpaca paper account.", leader: "Your paper account copies the leading AI." }[m.mode] || "";
+                     each: "Each AI has its own Alpaca paper account.", leader: "Your paper account copies the leading AI." }[m.mode] || ""
+    + (m.sizing === "exact" ? " Alpaca holds the same share counts as the league, so its gains and losses in dollars match this site; the rest of the account stays as cash."
+                            : m.mode && m.mode !== "off" ? " Positions are scaled to the size of the Alpaca account: same percentages as the league, bigger dollars." : "");
   const sync = m.last_sync ? `Last sync ${esc(m.last_sync.date)} (${esc(m.last_sync.ts)} UTC): paper equity ${money(m.last_sync.equity)}, ${m.last_sync.orders} order(s).` : "Not synced yet.";
   const holdings = m.holdings.length ? `<div class="scroll"><table><tr><th>Ticker</th>${ids.map(id => `<th class="num">${esc(label(id))}</th>`).join("")}<th class="num">In Alpaca (total)</th></tr>${
     m.holdings.map(h => `<tr><td>${esc(h.ticker)}</td>${ids.map(id => `<td class="num">${h.by_agent[id] ? h.by_agent[id].toFixed(4) : "–"}</td>`).join("")}<td class="num">${h.total.toFixed(4)}</td></tr>`).join("")}</table></div>`

@@ -96,7 +96,7 @@ def to_delete(names: list[str], keep: int) -> list[str]:
 # Settings worth restoring with the database. Secrets are never included:
 # anything whose name looks like one is left out by name AND by pattern.
 CONFIG_KEYS = ("AGENT_BACKEND", "CLAUDE_MODEL", "GPT_MODEL", "REASONING_EFFORT", "ALPACA_DATA_FEED",
-               "MIRROR_MODE", "WEB_SEARCH_SOFT_LIMIT", "REPORTS", "REPORT_TIMEOUT_SEC", "REPORT_MAX_TOOL_CALLS",
+               "MIRROR_MODE", "MIRROR_SIZING", "WEB_SEARCH_SOFT_LIMIT", "REPORTS", "REPORT_TIMEOUT_SEC", "REPORT_MAX_TOOL_CALLS",
                "DAILY_AI_COST_ALERT_USD", "CODEX_SANDBOX", "DOMAIN", "APP_UID", "BACKUP_KEEP_DAILY",
                "BACKUP_KEEP_MONTHLY", "BACKUP_RCLONE_REMOTE", "BACKUP_S3_ENDPOINT", "BACKUP_S3_BUCKET",
                "BACKUP_S3_PREFIX", "GPT_PRICE_IN", "GPT_PRICE_CACHED_IN", "GPT_PRICE_OUT", "MAX_API_SPEND_USD")
