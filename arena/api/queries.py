@@ -504,6 +504,7 @@ def mirror_overview(conn) -> dict:
                        "target_qty": _r(r["target_qty"]), "weight": _r(r["virtual_weight"]),
                        "order_ids": [o for o in (r["order_ids"] or "").split(",") if o], "note": r["note"]})
     return {"mode": mirror.mode(),
+            "sizing": mirror.sizing(),
             "last_sync": dict(run) if run else None,
             "holdings": [{"ticker": t, "by_agent": by, "total": _r(sum(v or 0 for v in by.values()))}
                          for t, by in sorted(holdings.items())],

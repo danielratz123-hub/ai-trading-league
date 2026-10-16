@@ -18,8 +18,17 @@ adapts and logs every difference in the mirror_log table:
     shorts are rounded toward zero, and shorts under 1 share are skipped;
   * a position can't flip long <-> short in one order: it's closed first,
     then reopened on the other side;
-  * order sizes are scaled to the paper account's equity, so the paper
-    account holds the same *weights* as the leader.
+  * order sizes follow MIRROR_SIZING (see sizing()).
+
+MIRROR_SIZING in .env:
+
+  scaled  (default) the paper account holds the same *weights* as the
+          league, sized to its own equity: an agent with $1,000 copied
+          into a $50,000 share moves 50x the dollars
+  exact   the paper account holds the league's own share counts, so its
+          dollar gains and losses match the website. The rest of the
+          account sits as cash. At league size more orders hit the limits
+          above (shorts under 1 share, orders under $1).
 """
 from __future__ import annotations
 
@@ -51,6 +60,12 @@ def mode() -> str:
     if m in ("off", "leader", "each", "combined"):
         return m
     return "leader" if os.getenv("MIRROR_PAPER", "0") == "1" else "off"   # older setting
+
+
+def sizing() -> str:
+    """scaled | exact (read at call time, like mode())."""
+    s = os.getenv("MIRROR_SIZING", "").strip().lower()
+    return s if s in ("scaled", "exact") else "scaled"
 
 
 def keys_for(agent_id: str) -> tuple[str, str]:
@@ -170,7 +185,8 @@ def sync(conn: sqlite3.Connection, d: str, broker: Broker | None = None, dry_run
         p = get_price(conn, t, d, "open") or (price_on_or_before(conn, t, d) or (None, None))[1]
         if p:
             prices[t] = p
-    lines = plan(weights, prices, broker.equity(), current)
+    # exact: size to the agent's own equity, so weight * equity / price = its share count
+    lines = plan(weights, prices, val.equity if sizing() == "exact" else broker.equity(), current)
     if dry_run:
         return lines
     # Sells (and short opens) first so buys have the cash.
@@ -275,7 +291,8 @@ def _attributed(conn) -> dict[tuple[str, str], float]:
 
 def sync_combined(conn: sqlite3.Connection, d: str, broker: Broker | None = None,
                   dry_run: bool = False) -> dict[str, list[MirrorLine]]:
-    """One paper account for all agents, split equally. Sends ONE net order
+    """One paper account for all agents, split equally (or, with
+    MIRROR_SIZING=exact, each agent's own league equity). Sends ONE net order
     per ticker (so the agents never trade against each other inside the
     account) and records each agent's part of it."""
     agents = ledger.agent_ids(conn)
@@ -283,12 +300,14 @@ def sync_combined(conn: sqlite3.Connection, d: str, broker: Broker | None = None
         return {}
     broker = broker or AlpacaPaperBroker()
     equity = broker.equity()
-    share = equity / len(agents)
+    exact = sizing() == "exact"
     current = broker.positions()
     prev = _attributed(conn)
     weights: dict[tuple[str, str], float] = {}
+    budget: dict[str, float] = {}
     for a in agents:
         val = ledger.value_agent(conn, a, d, "open")
+        budget[a] = val.equity if exact else equity / len(agents)
         if val.equity > 0:
             for t, v in val.ticker_value.items():
                 weights[(a, t)] = v / val.equity
@@ -300,7 +319,7 @@ def sync_combined(conn: sqlite3.Connection, d: str, broker: Broker | None = None
         px = get_price(conn, t, d, "open") or (price_on_or_before(conn, t, d) or (None, None))[1]
         if not px:
             continue
-        ideal = {a: weights.get((a, t), 0.0) * share / px for a in agents}
+        ideal = {a: weights.get((a, t), 0.0) * budget[a] / px for a in agents}
         net = sum(ideal.values())
         net_target = -math.floor(-net) if net < 0 else round(net, 6)   # whole-share shorts
         cur = current.get(t, 0.0)

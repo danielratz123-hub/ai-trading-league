@@ -226,3 +226,55 @@ def test_dashboard_shows_whose_shares_are_whose(conn, monkeypatch):
     aapl = next(h for h in m["holdings"] if h["ticker"] == "AAPL")
     assert set(aapl["by_agent"]) == {"claude", "gpt"} and aapl["total"] > aapl["by_agent"]["claude"]
     assert {o["agent"] for o in m["orders"]} == {"claude", "gpt"} and m["last_sync"]["mode"] == "combined"
+
+
+# ---------------------------------------------------------------- exact sizing (MIRROR_SIZING=exact)
+
+
+def league_shares(conn, agent):
+    return {p["ticker"]: p["shares"] for p in ledger.positions(conn, agent)}
+
+
+def test_sizing_setting(monkeypatch):
+    monkeypatch.delenv("MIRROR_SIZING", raising=False)
+    assert mirror.sizing() == "scaled"                                # default: unchanged behaviour
+    monkeypatch.setenv("MIRROR_SIZING", " Exact ")
+    assert mirror.sizing() == "exact"
+    monkeypatch.setenv("MIRROR_SIZING", "huge")
+    assert mirror.sizing() == "scaled"
+
+
+def test_exact_combined_copies_the_league_share_counts(conn, monkeypatch):
+    agents_with(conn, {"AAPL": 0.25}, {"XOM": 0.2})
+    monkeypatch.setenv("MIRROR_MODE", "combined")
+    monkeypatch.setenv("MIRROR_SIZING", "exact")
+    b = FakeBroker(100_000)                                           # account size no longer matters
+    mirror.sync_all(conn, DAYS[2], brokers={"combined": b})
+    orders = dict(b.orders)
+    assert orders["AAPL"] == pytest.approx(league_shares(conn, "claude")["AAPL"], rel=1e-6)   # ~2.5 sh, ~$250
+    assert orders["XOM"] == pytest.approx(league_shares(conn, "gpt")["XOM"], rel=1e-6)        # ~4 sh, ~$200
+    held = {(r["agent_id"], r["ticker"]): r["qty"] for r in conn.execute("SELECT * FROM mirror_holdings")}
+    assert held[("claude", "AAPL")] == pytest.approx(league_shares(conn, "claude")["AAPL"], rel=1e-6)
+
+
+def test_switching_to_exact_shrinks_scaled_positions(conn, monkeypatch):
+    agents_with(conn, {"AAPL": 0.25}, {"XOM": 0.2})
+    monkeypatch.setenv("MIRROR_MODE", "combined")
+    b = FakeBroker(100_000)
+    mirror.sync_all(conn, DAYS[2], brokers={"combined": b})          # scaled first: ~125 AAPL
+    monkeypatch.setenv("MIRROR_SIZING", "exact")
+    b2 = FakeBroker(100_000, positions=b.positions())
+    mirror.sync_all(conn, DAYS[2], brokers={"combined": b2})
+    assert b2.positions()["AAPL"] == pytest.approx(league_shares(conn, "claude")["AAPL"], rel=1e-6)
+    assert dict(b2.orders)["AAPL"] < 0                                 # sold down to the league's size
+
+
+def test_exact_each_mode_and_dashboard(conn, monkeypatch):
+    from arena.api import queries
+    two_agents_trading(conn)
+    monkeypatch.setenv("MIRROR_MODE", "each")
+    monkeypatch.setenv("MIRROR_SIZING", "exact")
+    brokers = {"claude": FakeBroker(100_000), "gpt": FakeBroker(50_000)}
+    mirror.sync_all(conn, DAYS[2], brokers=brokers)
+    assert dict(brokers["gpt"].orders)["XOM"] == pytest.approx(league_shares(conn, "gpt")["XOM"], rel=1e-6)
+    assert queries.mirror_overview(conn)["sizing"] == "exact"
