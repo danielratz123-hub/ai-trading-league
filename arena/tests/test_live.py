@@ -109,7 +109,9 @@ class FakeAlpaca:
         threading.Thread(target=run, daemon=True).start()
         ready.wait(10)
 
-    def trade(self, symbol, price, ts="2026-10-12T14:30:01.123456789Z"):
+    def trade(self, symbol, price, ts=None):
+        # today, after the REST seed (14:00 ET), so the trade is the newest quote
+        ts = ts or f"{datetime.now(ET).date().isoformat()}T22:30:01.123456789Z"
         msg = json.dumps([{"T": "t", "S": symbol, "p": price, "s": 5, "t": ts}])
         for ws in list(self.clients):
             asyncio.run_coroutine_threadsafe(ws.send(msg), self.loop)
@@ -118,6 +120,10 @@ class FakeAlpaca:
         for ws in list(self.clients):
             asyncio.run_coroutine_threadsafe(ws.close(), self.loop)
         self.clients.clear()
+
+
+def _et_hhmm(iso):
+    return datetime.fromisoformat(iso).astimezone(ET).strftime("%H:%M")
 
 
 def wait_for(cond, timeout=10.0):
@@ -164,7 +170,7 @@ def test_stream_subscribes_holdings_and_spy_and_pushes_prices(stream_env):
         assert rest_calls and set(rest_calls[0]) == {"AAPL", "XOM", "SPY"}       # an instant price for all
         fake.trade("AAPL", 111.5)
         assert wait_for(lambda: ls.quotes.get("AAPL") == 111.5)
-        assert ls.state()["label"] == "Live · IEX" and ls.state()["updated"] == "10:30"   # 14:30Z = 10:30 ET
+        assert ls.state()["label"] == "Live · IEX" and ls.state()["updated"] == _et_hhmm(f"{today}T22:30:00+00:00")
         loop.run_until_complete(asyncio.sleep(0.3))
         received = []
         while not q.empty():
