@@ -414,9 +414,16 @@ def propose(conn: sqlite3.Connection, hconn: sqlite3.Connection, agent_id: str, 
           "baseline_score": bwf["risk_adjusted_score"], "attempts": wf["attempts"]}
     if wf["trades"] < c.min_oos_trades:
         return fail("walk_forward", f"{wf['trades']} out-of-sample trades; needs {c.min_oos_trades}", d1, ids)
+    # Both scores: the mean WEEKLY score alone can be positive for a strategy
+    # that loses most of its money (a good week scores +3, a terrible one ~-1),
+    # so the whole-period score (total return / max drawdown) must win too.
+    d1.update(period_score=wf["period_score"], baseline_period_score=bwf["period_score"])
     if not wf["risk_adjusted_score"] > bwf["risk_adjusted_score"]:
         return fail("walk_forward", f"score {wf['risk_adjusted_score']:.3f} is not above the {base_what} score "
                     f"{bwf['risk_adjusted_score']:.3f}", d1, ids)
+    if not wf["period_score"] > bwf["period_score"]:
+        return fail("walk_forward", f"whole-period score (return / max drawdown) {wf['period_score']:.3f} is not "
+                    f"above the {base_what}'s {bwf['period_score']:.3f}", d1, ids)
     log(conn, agent_id, "walk_forward", True, f"{wf['trades']} OOS trades, score {wf['risk_adjusted_score']:.3f} > "
         f"{bwf['risk_adjusted_score']:.3f} ({base_what}); attempt {wf['attempts']} of this idea", idea_key=key,
         detail=d1, run_ids=ids, **kw)
@@ -439,9 +446,12 @@ def propose(conn: sqlite3.Connection, hconn: sqlite3.Connection, agent_id: str, 
         return fail("holdout", f"baseline holdout run failed: {bho.get('error')}", {}, ids)
     d3 = {"score": ho["risk_adjusted_score"], "baseline_score": bho["risk_adjusted_score"], "trades": ho["trades"],
           "return_pct": ho["total_return_pct"], "baseline_return_pct": bho["total_return_pct"]}
-    if ho["risk_adjusted_score"] < bho["risk_adjusted_score"] - c.holdout_margin:
-        return fail("holdout", f"holdout score {ho['risk_adjusted_score']:.3f} < {base_what} "
-                    f"{bho['risk_adjusted_score']:.3f}; the idea is retired", d3, ids, retire=True)
+    d3.update(period_score=ho["period_score"], baseline_period_score=bho["period_score"])
+    if ho["risk_adjusted_score"] < bho["risk_adjusted_score"] - c.holdout_margin \
+            or ho["period_score"] < bho["period_score"] - c.holdout_margin:
+        return fail("holdout", f"holdout score {ho['risk_adjusted_score']:.3f} (whole period {ho['period_score']:.3f}) "
+                    f"vs {base_what} {bho['risk_adjusted_score']:.3f} ({bho['period_score']:.3f}); the idea is "
+                    f"retired", d3, ids, retire=True)
     log(conn, agent_id, "holdout", True, f"holdout score {ho['risk_adjusted_score']:.3f} >= "
         f"{bho['risk_adjusted_score']:.3f}", idea_key=key, detail=d3, run_ids=ids, **kw)
     # 4. Shadow stage starts (a new challenger replaces any old one: its record restarts at zero).

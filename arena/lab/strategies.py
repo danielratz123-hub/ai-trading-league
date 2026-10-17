@@ -117,6 +117,37 @@ def claude_sector_rotation(prices: pd.DataFrame, date: str, sectors: int = 4, na
     return {t: 1.0 / names for t in picks}
 
 
+def low_vol_defensive(prices: pd.DataFrame, date: str, names: int = 10) -> dict:
+    """Library sleeve (not a live strategy): the 10 calmest S&P 500 stocks
+    (60-day volatility) that are above their 200-day average, 10% each."""
+    close = prices["close"][_stocks(prices["close"])]
+    if len(close) < 200:
+        return {}
+    vol = close.iloc[-61:].pct_change().std()
+    ok = (close.iloc[-1] > close.iloc[-200:].mean()) & vol.notna()
+    picks = vol[ok].sort_values().head(names)
+    return {t: 1.0 / names for t in picks.index}
+
+
+def short_term_reversal(prices: pd.DataFrame, date: str, names: int = 5, pool: int = 100) -> dict:
+    """Library sleeve (not a live strategy): among the 100 most traded S&P 500
+    stocks in a long-term uptrend (above the 200-day average), the 5 that
+    fell most over the last week, 20% each (buy the dip)."""
+    close = prices["close"]
+    if len(close) < 200:
+        return {}
+    pool_names = _most_traded(prices, _stocks(close), pool)
+    c = close[pool_names]
+    up = c.iloc[-1] > c.iloc[-200:].mean()
+    r5 = _ret(c, 5)
+    picks = r5[up & r5.notna()].sort_values().head(names)
+    return {t: 1.0 / names for t in picks.index}
+
+
+# The five sleeves the Phase 5 allocator splits capital across.
+SLEEVES = ("gpt_six_month_momentum", "claude_momentum_leaders", "claude_sector_rotation", "low_vol_defensive",
+           "short_term_reversal")
+
 # name -> (function, the live strategy it encodes)
 LIBRARY = {
     "spy_buy_and_hold": (spy_buy_and_hold, "benchmark"),
@@ -124,4 +155,6 @@ LIBRARY = {
     "gpt_six_month_momentum_uncapped": (gpt_six_month_momentum_uncapped, "gpt slot 1 v1 'Six-month momentum leaders'"),
     "claude_momentum_leaders": (claude_momentum_leaders, "claude slot 1 v1 'Tech/AI + refiner momentum'"),
     "claude_sector_rotation": (claude_sector_rotation, "claude slot 1 'Sector-rotation momentum'"),
+    "low_vol_defensive": (low_vol_defensive, "library sleeve (defensive)"),
+    "short_term_reversal": (short_term_reversal, "library sleeve (buy the dip)"),
 }

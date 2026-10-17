@@ -87,6 +87,10 @@ class Options:
     benchmark: bool = False
     bps_per_side: float | None = None
     universe: set[str] | None = None        # tradable tickers (default: the league universe)
+    # Phase 5A (adaptive.py), backtest only: size positions ~ 1/volatility,
+    # and/or set each stop at this multiple of ATR instead of a fixed %.
+    vol_sizing: bool = False
+    atr_stop_multiple: float | None = None
 
 
 @dataclass
@@ -272,7 +276,7 @@ def run(spec: StrategySpec, frame: pd.DataFrame, start: str, end: str, labels: d
     hl = lconfig.get().hard_limits
     labels = labels or {}
     params = {**lconfig.default_params(), **(spec.params or {})}
-    stop_pct = float(params["stop_loss_pct"])
+    stop_pct = default_stop = float(params["stop_loss_pct"])
     from .. import universe as uni
     tradable = set(opt.universe) if opt.universe is not None else set(uni.SECTOR_OF)
     frame = frame.loc[:end]
@@ -295,6 +299,9 @@ def run(spec: StrategySpec, frame: pd.DataFrame, start: str, end: str, labels: d
     dollar_vol = (frame["close"] * vol).rolling(20, min_periods=20).mean().to_numpy(float)
     row = {d: i for i, d in enumerate(dates)}
     by_exec = {ex: dec for dec, ex in sched}
+    from . import adaptive
+    RV = adaptive.realized_vol(frame["close"]).to_numpy(float) if opt.vol_sizing else None
+    ATR = adaptive.atr(frame).reindex(columns=tickers).to_numpy(float) if opt.atr_stop_multiple else None
 
     cash = capital
     shares: dict[str, float] = {}
@@ -363,7 +370,10 @@ def run(spec: StrategySpec, frame: pd.DataFrame, start: str, end: str, labels: d
             state = labels.get(dec)
             px_dec = {t: C_raw[j, idx[t]] for t in targets[dec]}
             av = {t: avg_vol[j, idx[t]] for t in targets[dec]}
-            w, lim_notes = limit_targets(targets[dec], px_dec, av, params, tradable, opt.benchmark)
+            raw_w = targets[dec]
+            if RV is not None:
+                raw_w = adaptive.vol_scaled(raw_w, {t: RV[j, idx[t]] for t in raw_w})
+            w, lim_notes = limit_targets(raw_w, px_dec, av, params, tradable, opt.benchmark)
             if lim_notes:
                 notes.append(f"{dec}: " + "; ".join(lim_notes[:6]) + (" ..." if len(lim_notes) > 6 else ""))
             blocked.clear()
@@ -407,6 +417,8 @@ def run(spec: StrategySpec, frame: pd.DataFrame, start: str, end: str, labels: d
             for t, sh in shares.items():
                 base = C[j, idx[t]]
                 op = O[i, idx[t]]
+                if ATR is not None:
+                    stop_pct = adaptive.atr_stop_pct(ATR[j, idx[t]], base, opt.atr_stop_multiple) or default_stop
                 if sh > 0:
                     stops[t] = base * (1 - stop_pct)
                     if math.isfinite(op) and op <= stops[t]:

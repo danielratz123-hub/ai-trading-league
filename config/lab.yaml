@@ -87,3 +87,29 @@ evidence:
     min_backtest_trades: 50                # out-of-sample (walk_forward) trades in a cited run
     min_live_trades: 10                    # graded live trades among the cited decisions
     hypothesis_max_weeks: 6                # unconfirmed after this: retired
+
+# Phase 5: the adaptive layer (arena/lab/adaptive.py). BACKTEST ONLY for now:
+# nothing here is wired into the live league. Going live needs 4+ weeks of
+# shadow decisions and a human's approval.
+adaptive:
+  vol_sizing:                     # 5A: each position carries similar risk
+    vol_days: 20                  # realized volatility window
+  atr_stops:                      # 5A: stops from volatility instead of a fixed %
+    atr_days: 14
+    multiple: 2.5                 # stop = multiple x ATR below the decision close
+    multiple_range: [1.5, 4.0]    # what an agent may choose from (it can't change the formula)
+    min_stop_pct: 0.03            # the stop is always between these
+    max_stop_pct: 0.15            # (the live param range is 3-8%: widening it would be a human decision)
+  allocator:                      # 5B: weekly capital split across an agent's strategies
+    lookback_days: 756            # past days used (3 years); only data before the decision
+    min_regime_days: 20           # fewer days in the current state: that strategy gets no tilt
+    shrink_days: 250              # tilt = days / (days + shrink_days) of the full tilt (thin evidence -> equal)
+    max_tilt: 1.0                 # full tilt: weight = equal x (1 + max_tilt x standardized score)
+    min_weight: 0.05
+    max_weight: 0.40
+    max_change: 0.15              # per strategy per rebalance (percentage points / 100)
+    confirm_days: 3               # an intra-week move only after the state changed and held this many days
+  risk_dial:                      # 5C: total exposure, can only cut risk
+    market_exposure: 0.65         # SPY below its 200-day average or volatility in the high bucket
+    drawdown_levels: [[0.08, 0.75], [0.12, 0.50]]   # agent down >= 8% from peak -> 75%, >= 12% -> 50%
+    recover_per_week: 0.10        # exposure comes back at most this much per week

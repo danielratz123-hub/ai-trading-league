@@ -85,6 +85,27 @@ class Evidence:
 
 
 @dataclass(frozen=True)
+class Adaptive:
+    vol_days: int
+    atr_days: int
+    atr_multiple: float
+    atr_multiple_range: tuple[float, float]
+    min_stop_pct: float
+    max_stop_pct: float
+    lookback_days: int
+    min_regime_days: int
+    shrink_days: int
+    max_tilt: float
+    min_weight: float
+    max_weight: float
+    max_change: float
+    confirm_days: int
+    market_exposure: float
+    drawdown_levels: tuple[tuple[float, float], ...]
+    recover_per_week: float
+
+
+@dataclass(frozen=True)
 class LabConfig:
     history: History
     survivorship_note: str
@@ -94,6 +115,27 @@ class LabConfig:
     walk_forward: WalkForward
     holdout_months: int
     evidence: Evidence
+    adaptive: Adaptive
+
+
+def _adaptive(a: dict) -> "Adaptive":
+    vs, at, al, rd = a["vol_sizing"], a["atr_stops"], a["allocator"], a["risk_dial"]
+    lo, hi = (float(x) for x in at["multiple_range"])
+    out = Adaptive(int(vs["vol_days"]), int(at["atr_days"]), float(at["multiple"]), (lo, hi),
+                   float(at["min_stop_pct"]), float(at["max_stop_pct"]), int(al["lookback_days"]),
+                   int(al["min_regime_days"]), int(al["shrink_days"]), float(al["max_tilt"]), float(al["min_weight"]),
+                   float(al["max_weight"]), float(al["max_change"]), int(al["confirm_days"]),
+                   float(rd["market_exposure"]), tuple((float(d), float(e)) for d, e in rd["drawdown_levels"]),
+                   float(rd["recover_per_week"]))
+    if not lo <= out.atr_multiple <= hi:
+        raise ConfigError("adaptive.atr_stops.multiple must be inside multiple_range")
+    if not 0 < out.min_stop_pct < out.max_stop_pct < 1:
+        raise ConfigError("adaptive.atr_stops: need 0 < min_stop_pct < max_stop_pct < 1")
+    if not 0 <= out.min_weight < out.max_weight <= 1:
+        raise ConfigError("adaptive.allocator: need 0 <= min_weight < max_weight <= 1")
+    if not all(0 < e <= 1 for _, e in out.drawdown_levels) or not 0 < out.market_exposure <= 1:
+        raise ConfigError("adaptive.risk_dial: exposures must be in (0, 1] (the dial only cuts risk)")
+    return out
 
 
 def _evidence(ev: dict) -> Evidence:
@@ -127,6 +169,7 @@ def parse(raw: dict) -> LabConfig:
             walk_forward=WalkForward(int(wf["design_months"]), int(wf["test_months"]), int(wf["step_months"])),
             holdout_months=int(raw["holdout"]["months"]),
             evidence=_evidence(raw["evidence"]),
+            adaptive=_adaptive(raw["adaptive"]),
         )
     except KeyError as err:
         raise ConfigError(f"config/lab.yaml is missing {err}") from None

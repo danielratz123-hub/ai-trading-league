@@ -175,6 +175,23 @@ def cmd_evidence_dry_run(args) -> int:
     return 0 if all(rep["checks"].values()) else 1
 
 
+def cmd_adaptive_study(args) -> int:
+    from . import study
+    with histdata.connect(args.history_db) as hconn:
+        conn = _arena(args)
+        try:
+            rep = study.run(conn, hconn)
+        finally:
+            conn.close()
+    out = args.out or "adaptive_study.json"
+    with open(out, "w", encoding="utf-8") as f:
+        json.dump(rep, f, indent=1, default=str)
+    _print({"written": out, "5A": {n: {k: v["use"] for k, v in r.items() if k in ("vol_sizing", "atr_stops", "both")}
+                                   for n, r in rep["5A"].items()},
+            "5B_5C": {k: rep["5B_5C"][k] for k in ("allocator_vs_equal", "dial_vs_none", "allocator_dial_vs_equal")}})
+    return 0
+
+
 COMMANDS = {
     "history-download": cmd_history_download,
     "history-update": cmd_history_update,
@@ -184,6 +201,7 @@ COMMANDS = {
     "spy-check": cmd_spy_check,
     "repro": cmd_repro,
     "evidence-dry-run": cmd_evidence_dry_run,
+    "adaptive-study": cmd_adaptive_study,
 }
 
 
@@ -205,6 +223,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--from", dest="source", help="evidence-dry-run: league database to copy (read only)")
     p.add_argument("--agent", help="evidence-dry-run: the agent (default gpt)")
     p.add_argument("--slot", type=int, help="evidence-dry-run: the slot (default 1)")
+    p.add_argument("--out", help="adaptive-study: where to write the full report (JSON)")
     return p
 
 

@@ -159,3 +159,65 @@ trades, positions and pending orders are unchanged and every step was
 logged. On the copy only, the strategy is flagged as having hit its
 drawdown limit (a rewrite trigger), and the cooldown and freeze are relaxed,
 since both would refuse a rewrite of a days-old strategy.
+
+## Phase 5: the adaptive layer (backtest only)
+
+Nothing here is wired into the live league. Settings are in
+`config/lab.yaml` under `adaptive:`. The code is in `arena/lab/adaptive.py`,
+the study in `arena/lab/study.py`.
+
+* **5A** (inside each strategy). `vol_scaled()` sizes each position at
+  about 1/volatility, keeping the same total. `atr_stop_pct()` sets the stop
+  at a multiple of ATR(14), between 3% and 15%. An agent could only choose
+  the multiple, inside 1.5-4. The engine applies them through
+  `Options(vol_sizing=..., atr_stop_multiple=...)`, and the hard limits
+  still apply after them.
+* **5B** (weekly, across strategies). The allocator tilts toward strategies
+  that did better in the *current* market state on past days only. The tilt
+  shrinks toward equal weight when there are few such days. Each strategy
+  gets 5-40%, weights move at most 15 points per rebalance, and an
+  extra move happens only after a state change has held 3 days.
+* **5C** (daily, the whole portfolio). The risk dial cuts exposure to 65%
+  when SPY is below its 200-day average or volatility is high, and to 75% /
+  50% at 8% / 12% drawdown. Exposure comes back at most 10 points a week,
+  and never goes above 100%.
+
+```bash
+python -m arena.lab adaptive-study --arena-db data/arena.db --out adaptive_study.json
+```
+
+The study tests five strategies: the three coded live ones, plus
+`low_vol_defensive` and `short_term_reversal`. Live, each agent runs only one
+strategy, so the allocator has nothing to split until the agents run more.
+Each strategy is tested four ways (plain, vol sizing, ATR stops, both).
+The combinations are equal weight, allocator, and each with the risk dial.
+Results are out of sample before the holdout (overall, per 6-month window,
+per market state), then on the holdout **once**: each idea's holdout result
+is logged in `backtest_runs`, and reruns reuse it. A piece is recommended
+only if it beats the plain version on **both** the league's mean weekly
+score and the whole-period score (total return / max drawdown), before the
+holdout and on it.
+
+**Why both scores.** The league's weekly score is return % / max(drawdown %,
+1%), averaged over weeks. Over years it can be positive for a strategy that
+lost most of its money, because a good week scores +3 or more and a
+terrible week only about -1. The Phase 4 challenger gates therefore also
+require the whole-period score to win.
+
+**Results (2016-10 → 2025-10 out of sample, holdout 2025-10-17 → 2026-10-16):**
+
+| Piece | Verdict |
+|---|---|
+| 5A ATR stops | **use** for 4 of 5 strategies. GPT momentum: +3,033% vs +1,108%, max drawdown 29% vs 39%; holdout +125% vs +63%. Not for `low_vol_defensive` |
+| 5A volatility sizing | **don't use**: worse for all 5 |
+| 5B allocator | **use**: beats equal weight on both scores before the holdout (period score -0.55 vs -0.94) and on it (-0.28 vs -1.00); 15 of 16 test windows |
+| 5C risk dial | **not recommended under the rule**. It cuts drawdowns (equal weight 69% → 48%; allocator + dial 35%) and wins on the period score, but loses on the mean weekly score. A human decision |
+
+**Costs dominate.** Most coded strategies lose money in the backtest. A
+big reason is the league's commission minimum ($0.35 a trade, up to 1% of
+the trade) on a $1,000 account: a weekly-rebalanced 9-name book pays about
+0.6% a week. The GPT momentum strategy (4 names) is the exception.
+
+**Before anything here goes live:** shadow the allocator and dial decisions
+for at least 4 weeks (logged, no capital), then a human approves switching
+them on.
