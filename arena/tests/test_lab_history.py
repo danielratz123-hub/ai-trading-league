@@ -120,7 +120,7 @@ def test_gap_check_reports_missing_stale_and_listings(hconn):
     histdata.store_calendar(hconn, src, "2016-01-01", "2016-12-31")
     histdata.download(hconn, src, ["SPY", "MSFT", "NEWCO", "GONE", "NADA"], "2016-03-31", sleep=no_sleep)
     rep = histdata.gap_check(hconn, "2016-03-31")
-    assert not rep["ok"]
+    assert not rep["ok"]                                   # MSFT's missing day
     assert rep["missing"] == {"MSFT": ["2016-02-10"]}
     assert rep["late_start"] == {"NEWCO": "2016-02-01"}      # a listing, not a gap
     assert rep["stale"] == {"GONE": "2016-03-01"}
@@ -145,3 +145,11 @@ def test_nightly_history_job_only_when_enabled():
     assert ("history-update", "history-2026-10-16") in [(j.name, j.key) for j in jobs]
     early = datetime(2026, 10, 16, 18, 0, tzinfo=ET)
     assert not any(j.name == "history-update" for j in due_jobs(early, cal, {}, True, None, history_at=(19, 0)))
+
+
+def test_stale_and_no_data_symbols_are_reported_but_not_gaps(hconn):
+    src = FakeSource(skip={"GONE": [d for d in CAL if d > "2016-03-01"]}, no_data={"NADA"})
+    histdata.store_calendar(hconn, src, "2016-01-01", "2016-12-31")
+    histdata.download(hconn, src, ["SPY", "GONE", "NADA"], "2016-03-31", sleep=no_sleep)
+    rep = histdata.gap_check(hconn, "2016-03-31")
+    assert rep["ok"] and rep["stale"] == {"GONE": "2016-03-01"} and rep["no_data"] == ["NADA"]

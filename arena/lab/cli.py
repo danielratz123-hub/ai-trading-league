@@ -132,10 +132,14 @@ def cmd_spy_check(args) -> int:
         _print(res)
         return 1
     diff = res["total_return_pct"] - res["spy_return_pct"]
+    # Relative: the gap is the one-time entry cost, so in percentage points it
+    # grows with the return (0.1% of money that has grown 4x is 0.4 points).
+    rel = (1 + res["total_return_pct"] / 100) / (1 + res["spy_return_pct"] / 100) - 1
     out = {k: res[k] for k in ("start", "end", "total_return_pct", "spy_return_pct", "final_equity")}
     out["difference_pct_points"] = round(diff, 3)
-    out["tolerance_pct_points"] = 0.5
-    out["ok"] = bool(abs(diff) <= 0.5)
+    out["final_value_vs_spy_pct"] = round(rel * 100, 3)
+    out["tolerance_pct"] = 0.5
+    out["ok"] = bool(abs(rel) * 100 <= 0.5)
     _print(out)
     return 0 if out["ok"] else 1
 

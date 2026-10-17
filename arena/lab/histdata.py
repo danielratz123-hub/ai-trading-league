@@ -350,10 +350,12 @@ def gap_check(conn: sqlite3.Connection, through: str | None = None, max_listed: 
     off_calendar bars on days the calendar says were closed
     no_data / failed  symbols the download got nothing for
 
-    ok = SPY present from the first calendar day, nothing missing, nothing stale,
-    nothing off-calendar and nothing failed.
+    ok = SPY present from the first calendar day, nothing missing, nothing
+    off-calendar and nothing failed. Stale and no-data symbols are reported
+    (a delisting, merger or rename, like a listing) but are not gaps.
     """
     h = labconfig.get().history
+    through = through or last_completed_day(conn)
     cal = calendar_days(conn, h.start, through)
     if not cal:
         return {"ok": False, "error": "no calendar stored; run history-download first"}
@@ -390,8 +392,7 @@ def gap_check(conn: sqlite3.Connection, through: str | None = None, max_listed: 
             out["late_start"][s] = first
     spy = conn.execute("SELECT MIN(day) FROM hist_bars_daily WHERE symbol='SPY'").fetchone()[0]
     out["spy_first_day"] = spy
-    out["ok"] = (spy == cal[0] and not out["missing"] and not out["stale"] and not out["off_calendar"]
-                 and not out["failed"])
+    out["ok"] = spy == cal[0] and not out["missing"] and not out["off_calendar"] and not out["failed"]
     return out
 
 
