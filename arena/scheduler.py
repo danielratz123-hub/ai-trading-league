@@ -65,7 +65,8 @@ MAX_ATTEMPTS = 3
 RETRY_AFTER = timedelta(minutes=30)
 TIMEOUTS = {"decide": 3 * 3600, "execute": 1800, "daily": 3600, "update-calendar": 600,
             "backup": 1800, "check-logins": 1200, "reports": 3600, "reconcile": 600, "heartbeat": 300, "morning-report": 300,
-            "risk-check": 1800, "daily-review": 3600, "weekly-review": 3600}
+            "risk-check": 1800, "daily-review": 3600, "weekly-review": 3600,
+            "history-update": 3600}
 RISK_CHECK_WINDOW = timedelta(minutes=30)   # a risk check later than this is skipped, not replayed
 WEEKLY_REVIEW_GRACE = timedelta(hours=4)    # decide stops waiting for a failing weekly review
 
@@ -94,6 +95,14 @@ class LearningTimes:
         while d.weekday() != self.weekly_weekday:
             d += timedelta(days=1)
         return _at(d.isoformat(), self.weekly_review)
+
+
+def history_time() -> tuple[int, int] | None:
+    """When the lab's nightly history append runs, or None (HISTORY_ENABLED is off)."""
+    from .lab import config as labconfig
+    if not labconfig.history_enabled():
+        return None
+    return labconfig.get().history.nightly_update_at
 
 
 def learning_times() -> LearningTimes | None:
@@ -133,12 +142,14 @@ def _close(d: str, calendar: dict[str, str]) -> datetime:
 
 
 def due_jobs(now: datetime, calendar: dict[str, str], history: dict[tuple[str, str], list[dict]],
-             league_started: bool, learning: LearningTimes | None = None) -> list[Job]:
+             league_started: bool, learning: LearningTimes | None = None,
+             history_at: tuple[int, int] | None = None) -> list[Job]:
     """Jobs that should run now, in the order to run them.
 
     calendar: trading day -> close time "HH:MM" (Eastern)
     history:  (job, key) -> previous runs [{"exit_code": int|None, "started_at": datetime}]
     learning: the learning layer's times, or None when it is off
+    history_at: the backtest lab's nightly history append (HISTORY_ENABLED=1), or None
     """
     now = now.astimezone(ET)
     today = now.date().isoformat()
@@ -226,6 +237,10 @@ def due_jobs(now: datetime, calendar: dict[str, str], history: dict[tuple[str, s
 
     if now >= _at(today, BACKUP_AT):
         add("backup", None, f"backup-{today}")
+
+    # The backtest lab's history database (data/history.db): append the day.
+    if history_at and today in calendar and now >= _at(today, history_at):
+        add("history-update", None, f"history-{today}")
 
     # "Still alive": if this message doesn't arrive, something is wrong.
     if now >= _at(today, HEARTBEAT_AT):
@@ -462,6 +477,11 @@ def run_forever(db_path: str | Path = SETTINGS.db_path, tick_seconds: int = 30) 
         log.exception("learning layer config error; its jobs are OFF until it is fixed")
         alerts.send("Learning layer: config/learning.yaml could not be read; its jobs are off. The league runs "
                     "as before.", level="error", key="learning-config", every=timedelta(hours=6))
+    history_at = None
+    try:
+        history_at = history_time()
+    except Exception:  # noqa: BLE001 - a broken lab config must not stop the league
+        log.exception("lab config error; the nightly history update is OFF until it is fixed")
     if learning:
         threading.Thread(target=_collector_loop, args=(db_path, _STOP), name="collector", daemon=True).start()
         log.info("learning layer on: risk checks, daily/weekly reviews and the 1-minute collector")
@@ -470,7 +490,8 @@ def run_forever(db_path: str | Path = SETTINGS.db_path, tick_seconds: int = 30) 
             _check_disk(db_path)
             last_disk_check = datetime.now(ET)
         started = conn.execute("SELECT 1 FROM agents LIMIT 1").fetchone() is not None
-        for job in due_jobs(datetime.now(ET), _calendar(conn), _history(conn), started, learning):
+        for job in due_jobs(datetime.now(ET), _calendar(conn), _history(conn), started, learning,
+                            history_at):
             if _STOP.is_set():
                 break
             run_job(conn, job, log_dir, Path(db_path).resolve())

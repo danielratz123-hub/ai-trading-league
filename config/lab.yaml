@@ -1,0 +1,65 @@
+# The backtesting lab (arena/lab/): historical data, SPY-only market-state
+# labels and the backtest engine.
+#
+# HUMAN-EDITED ONLY. No agent tool writes files, and agent code runs in the
+# sandbox, which cannot open this file. Cost assumptions, regime rules,
+# walk-forward windows and the holdout are therefore out of the agents'
+# reach. The hard risk limits are NOT repeated here: the engine reads them
+# from config/learning.yaml (hard_limits:), the same numbers the live league
+# enforces, so there is one source.
+#
+# Read once per process.
+
+history:
+  # Separate SQLite file next to arena.db (data/history.db; HISTORY_DB in
+  # .env overrides). Never mixed with the live `prices` table: the league
+  # trades on IEX bars, this is the SIP feed (all US exchanges) from 2016.
+  db_file: history.db
+  start: "2016-01-01"           # Alpaca's SIP daily history starts 2016-01-04
+  feed: sip                     # no IEX fallback: IEX history only starts ~2020
+  batch_symbols: 50             # symbols per request (the SDK pages through them)
+  requests_per_minute: 120      # Alpaca's free plan allows 200
+  max_retries: 5                # per batch, with exponential backoff
+  overlap_days: 10              # nightly update re-reads this many days to catch splits/dividends
+  nightly_update_at: "19:00"    # ET, trading days (only when HISTORY_ENABLED=1)
+  # Symbols downloaded on top of the league universe (S&P 500 + its ETFs).
+  extra_symbols: [VIXY]
+
+survivorship_note: >-
+  Survivorship bias: the backtest universe is TODAY's S&P 500 list. Companies
+  that were dropped from the index, went bankrupt or were bought out since 2016
+  are missing, and today's members are known winners. Historical results are
+  therefore optimistic; treat them as an upper bound, not a forecast.
+
+# Market-state labels from SPY only (arena/learning/regime.classify_spy).
+# The same function labels every historical day and every live day.
+market_state:
+  trend_sma_days: 200           # SPY close above its 200-day average -> up, else down
+  vol_days: 20                  # realized volatility window (annualized, close-to-close)
+  vol_low_below: 0.12           # < 12% annualized -> low
+  vol_high_at: 0.25             # >= 25% -> high; in between -> normal
+
+costs:
+  # Per side, on top of the league's commission model (arena/costs.py).
+  # Conservative on purpose: S&P 500 names usually trade tighter.
+  spread_bps_per_side: 5
+  slippage_bps_per_side: 5
+  # Names whose 20-day average dollar volume is below this get whole shares
+  # only (no fractional fills).
+  fractional_min_dollar_volume: 20000000
+
+engine:
+  starting_cash: 1000.0
+  rebalance: weekly             # weekly = decide at the week's last close, fill next open (the league's rhythm); daily also allowed
+  stop_fill: stop_or_open       # stop hit intraday -> fill at the stop, or at the open if it gapped through
+  min_history_days: 200         # first decision only once this many bars exist (the 200-day average)
+
+walk_forward:
+  design_months: 24             # in-sample window the idea is designed / tuned on
+  test_months: 6                # following out-of-sample window
+  step_months: 6                # roll forward by this much
+
+holdout:
+  # The most recent N months of data are locked: no design, walk-forward or
+  # agent run may touch them. Only the one-time promotion check may.
+  months: 12
