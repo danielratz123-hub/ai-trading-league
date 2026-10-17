@@ -170,7 +170,7 @@ def cmd_evidence_dry_run(args) -> int:
     src = args.source or args.arena_db
     if not src:
         raise SystemExit("--from PATH: the league database to copy (it is only read)")
-    rep = dryrun.run(src, args.agent or "gpt", args.slot or 1)
+    rep = dryrun.run(src, args.agent or "gpt", args.slot or 1, keep=args.keep)
     _print(rep)
     return 0 if all(rep["checks"].values()) else 1
 
@@ -224,6 +224,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--agent", help="evidence-dry-run: the agent (default gpt)")
     p.add_argument("--slot", type=int, help="evidence-dry-run: the slot (default 1)")
     p.add_argument("--out", help="adaptive-study: where to write the full report (JSON)")
+    p.add_argument("--keep", help="evidence-dry-run: also save the copy here (to look at it afterwards)")
     return p
 
 

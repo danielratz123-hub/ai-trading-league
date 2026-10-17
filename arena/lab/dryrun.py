@@ -82,7 +82,7 @@ class ScriptedReviewer(AgentAdapter):
         self.received.append(text)
 
 
-def run(source_db: str, agent: str = "gpt", slot: int = 1, replay_weeks: int = 8) -> dict:
+def run(source_db: str, agent: str = "gpt", slot: int = 1, replay_weeks: int = 8, keep: str | None = None) -> dict:
     from ..db import connect
     from ..lab import config as labconfig, evidence, histdata
     from ..learning import config as lconfig, review, strategies as strat
@@ -190,6 +190,8 @@ def run(source_db: str, agent: str = "gpt", slot: int = 1, replay_weeks: int = 8
         }
     finally:
         conn.close()
+        if keep:
+            shutil.copyfile(copy, keep)      # e.g. to preview the dashboard on the result
         labconfig.get, lconfig.get = lab_get, learn_get
         for k, v in env_before.items():
             if v is None:
