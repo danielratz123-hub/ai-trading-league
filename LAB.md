@@ -221,3 +221,30 @@ the trade) on a $1,000 account: a weekly-rebalanced 9-name book pays about
 **Before anything here goes live:** shadow the allocator and dial decisions
 for at least 4 weeks (logged, no capital), then a human approves switching
 them on.
+
+## Phase 6: the website
+
+The dashboard gets a **Backtests & experiments** section (`arena/web/lab.js`,
+`GET /api/lab` in `arena/api/lab.py`, read-only). It refreshes every two
+minutes and stays hidden until the lab's tables exist (the first lab
+command on that database creates them).
+
+* **Market state now:** today's SPY-only label with its numbers, plus a strip
+  of the last 60 trading days.
+* **Capital per strategy:** each strategy's share of its agent now and this
+  week's change, and the risk dial level (100%: it runs in backtests only).
+* **Experiments:** one card per challenger: walk-forward and holdout results
+  (weekly and whole-period scores, trades, vs SPY), how many backtest tries
+  the idea took, results per market state, shadow progress (trades, the
+  probability it's truly better, and weeks against their targets), its
+  status, and every logged step.
+* **Strategies per market state:** live and backtest side by side.
+* **Adaptive layer:** the Phase 5 study results, once `adaptive-study` has
+  run on that database.
+* **Recent backtests:** who asked, the idea, the attempt number, the purpose
+  and the result.
+* The **survivorship-bias** warning is at the top and next to every
+  backtest number.
+
+On the live server the section appears once a lab command has run there,
+for example `python -m arena.lab market-states` after `history-download`.

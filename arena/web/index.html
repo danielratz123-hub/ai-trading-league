@@ -27,6 +27,7 @@
         <a href="#play">Strategies</a>
         <a href="#trades">Trades</a>
         <a href="#learning" id="learning-link" hidden>Learning</a>
+        <a href="#lab" id="lab-link" hidden>Backtests</a>
       </div>
       <div class="status" aria-live="polite">
         <span class="dot-wrap" aria-hidden="true"><span class="dot-ping" id="status-ping" hidden></span><span class="dot" id="status-dot"></span></span>
@@ -140,7 +141,62 @@
         </table>
       </div></div>
     </section>
-    <!-- 10. Learning layer: scores, regimes, reports, lessons, versions, challengers, limits -->
+    <!-- 10. Backtest lab: market state, capital split, experiments, per-state results, backtest runs -->
+    <section id="lab" class="wrap section" aria-labelledby="lab-h" hidden>
+      <div class="section-head">
+        <h2 id="lab-h">Backtests &amp; experiments</h2>
+        <span class="sub" id="lab-sub"></span>
+      </div>
+      <p class="lab-caveat-box" role="note" id="lab-caveat-text"></p>
+
+      <h3 class="ln-h">Market state now</h3>
+      <div class="card lab-now-card">
+        <div id="lab-now"></div>
+        <div class="lab-strip" id="lab-strip" aria-label="Market state, last 60 trading days"></div>
+      </div>
+
+      <h3 class="ln-h">Capital per strategy</h3>
+      <div class="card table-card"><div class="scroll">
+        <table class="tbl" style="min-width:560px">
+          <thead><tr class="m"><th class="pl">AGENT</th><th>STRATEGY</th><th class="r">SHARE NOW</th><th class="r pr">CHANGE THIS WEEK</th></tr></thead>
+          <tbody id="lab-capital"></tbody>
+        </table>
+      </div></div>
+      <p class="lab-dial" id="lab-dial"></p>
+
+      <h3 class="ln-h">Experiments (challengers)</h3>
+      <div class="lab-exps" id="lab-exps"></div>
+
+      <h3 class="ln-h">Strategies per market state: live vs backtest</h3>
+      <div class="card table-card"><div class="scroll">
+        <table class="tbl" style="min-width:820px">
+          <thead><tr class="m"><th class="pl" rowspan="2">STRATEGY</th><th rowspan="2">MARKET STATE</th>
+            <th class="r" colspan="3">LIVE</th><th class="r" colspan="3">BACKTEST</th><th class="pr" rowspan="2"></th></tr>
+            <tr class="m"><th class="r">TRADES</th><th class="r">AVG</th><th class="r">WIN</th><th class="r">TRADES</th><th class="r">AVG</th><th class="r">WIN</th></tr></thead>
+          <tbody id="lab-strats"></tbody>
+        </table>
+      </div></div>
+
+      <h3 class="ln-h">Adaptive layer (backtests only)</h3>
+      <div class="card table-card"><div class="scroll">
+        <table class="tbl" style="min-width:720px">
+          <thead><tr class="m"><th class="pl">VARIANT</th><th>PERIOD</th><th class="r">RETURN</th><th class="r">MAX DD</th>
+            <th class="r">WEEKLY SCORE</th><th class="r">PERIOD SCORE</th><th class="pr"></th></tr></thead>
+          <tbody id="lab-adaptive"></tbody>
+        </table>
+      </div></div>
+
+      <h3 class="ln-h">Recent backtests</h3>
+      <div class="card table-card"><div class="scroll">
+        <table class="tbl" style="min-width:900px">
+          <thead><tr class="m"><th class="pl">WHEN</th><th>WHO</th><th>IDEA</th><th class="r">TRY</th><th>PURPOSE</th><th>STATUS</th>
+            <th class="r">RETURN</th><th class="r">SCORE</th><th class="pr"></th></tr></thead>
+          <tbody id="lab-runs"></tbody>
+        </table>
+      </div></div>
+    </section>
+
+    <!-- 11. Learning layer: scores, regimes, reports, lessons, versions, challengers, limits -->
     <section id="learning" class="wrap section" aria-labelledby="ln-h" hidden>
       <div class="section-head">
         <h2 id="ln-h">How they learn</h2>
@@ -217,5 +273,6 @@
   <script src="live.js"></script>
   <script src="v3.js"></script>
   <script src="learning.js"></script>
+  <script src="lab.js"></script>
 </body>
 </html>
