@@ -58,6 +58,11 @@ def cmd_history_update(args) -> int:
             conn = _arena(args)
             try:
                 _print({"market_states": label_all(conn, hconn)})
+                if labconfig.evidence_enabled():
+                    # Evidence rules: judge every code challenger in shadow on the new day.
+                    from . import evidence
+                    with conn:
+                        _print({"shadows": evidence.evaluate_shadows(conn, hconn)})
             finally:
                 conn.close()
         return 1 if rep.failed else 0
@@ -160,6 +165,16 @@ def cmd_repro(args) -> int:
     return 0
 
 
+def cmd_evidence_dry_run(args) -> int:
+    from . import dryrun
+    src = args.source or args.arena_db
+    if not src:
+        raise SystemExit("--from PATH: the league database to copy (it is only read)")
+    rep = dryrun.run(src, args.agent or "gpt", args.slot or 1)
+    _print(rep)
+    return 0 if all(rep["checks"].values()) else 1
+
+
 COMMANDS = {
     "history-download": cmd_history_download,
     "history-update": cmd_history_update,
@@ -168,6 +183,7 @@ COMMANDS = {
     "backtest": cmd_backtest,
     "spy-check": cmd_spy_check,
     "repro": cmd_repro,
+    "evidence-dry-run": cmd_evidence_dry_run,
 }
 
 
@@ -186,6 +202,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--grid", help='backtest walk_forward: JSON list of params, e.g. [{"stop_loss_pct": 0.05}]')
     p.add_argument("--start", help="backtest / spy-check: first execution day")
     p.add_argument("--end", help="backtest / spy-check: last day")
+    p.add_argument("--from", dest="source", help="evidence-dry-run: league database to copy (read only)")
+    p.add_argument("--agent", help="evidence-dry-run: the agent (default gpt)")
+    p.add_argument("--slot", type=int, help="evidence-dry-run: the slot (default 1)")
     return p
 
 

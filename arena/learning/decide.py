@@ -64,6 +64,15 @@ def _num01(x) -> bool:
     return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) and 0 <= x <= 1
 
 
+def _lab():
+    """The evidence rules (EVIDENCE_RULES=1), else None."""
+    from ..lab import config as labconfig
+    if not labconfig.evidence_enabled():
+        return None
+    from ..lab import evidence
+    return evidence
+
+
 def held_weights(conn: sqlite3.Connection, agent_id: str, d: str) -> dict[tuple[int, str], float]:
     val = ledger.value_agent(conn, agent_id, d, "close")
     out = {}
@@ -119,7 +128,14 @@ def check(conn: sqlite3.Connection, agent_id: str, decision_date: str, raw: dict
         if t.type == "code":
             hardlimits.attach_default_stops(conn, t, decision_date, params["stop_loss_pct"])
         errors += strategy_rule_errors(t, params, last)
-        if s is not None and s.challenger is not None:
+        lab_rules = _lab()
+        if lab_rules and s is not None and lab_rules.version_code(conn, s.version_id) and t.type != "code":
+            errors.append(f"Slot {t.slot}: its champion v{s.version} is code (promoted from a proven challenger); "
+                          f"submit this slot as type 'code' (the engine runs the saved code).")
+        if lab_rules and s is not None and s.challenger is not None \
+                and lab_rules.version_code(conn, s.challenger["version_id"]):
+            pass                       # a code challenger trades in shadow by itself (no positions needed)
+        elif s is not None and s.challenger is not None:
             cp = rs.get("challenger_positions")
             if not isinstance(cp, dict) or not all(isinstance(v, (int, float)) and not isinstance(v, bool)
                                                    for v in cp.values()):
@@ -233,7 +249,13 @@ def briefing_section(conn: sqlite3.Connection, agent_id: str, week_no: int, deci
         lines.append(f"- Slot {s.slot} \"{s.name}\" v{s.version}: params {json.dumps(s.params)}"
                      f"{'; COOLDOWN ' + why if cool else ''}{'; EMERGENCY-FLAGGED' if s.emergency_flagged_at else ''}\n"
                      f"  rules: {s.rules_text[:800]}")
-        if s.challenger:
+        lab_rules = _lab()
+        if lab_rules and lab_rules.version_code(conn, s.version_id):
+            lines.append("  This champion is CODE (a proven challenger): submit the slot as type 'code'.")
+        if s.challenger and lab_rules and lab_rules.version_code(conn, s.challenger["version_id"]):
+            lines.append(f"  CHALLENGER v{s.challenger['version']} (code) is trading in shadow by itself; no "
+                         f"challenger_positions needed.")
+        elif s.challenger:
             lines.append(f"  CHALLENGER v{s.challenger['version']} in shadow test: give challenger_positions for this "
                          f"slot. Its params {json.dumps(s.challenger['params'])}; rules: {s.challenger['rules_text'][:800]}")
     act = lessons.for_prompt(conn, agent_id, regime, now)

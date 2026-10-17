@@ -5,10 +5,11 @@ market-state labels, and an event-driven backtest engine with walk-forward
 testing and a locked holdout. The goal is for agents to test ideas on years
 of history first and treat live trading as confirmation.
 
-**Nothing here changes the live league.** The lab is its own package
-(`arena/lab/`). Its tables are only created when a lab command runs. Its one
-scheduler job (the nightly history append) is off until `HISTORY_ENABLED=1`.
-Phase 4 (connecting the lab to the agents) has not started; it needs approval.
+**Nothing here changes the live league until you switch it on.** The lab is
+its own package (`arena/lab/`). Phases 1-3 only run from lab commands. Their
+one scheduler job (the nightly history append) is off until
+`HISTORY_ENABLED=1`. Phase 4 (connecting the lab to the agents, below) is off
+until `EVIDENCE_RULES=1`.
 
 ## What is where
 
@@ -120,3 +121,41 @@ download stops at the last finished trading day.
 * **Benchmark mode** (no stops, no position cap, no price/volume filter) is
   only allowed for the `check` purpose. A 100% SPY buy-and-hold needs it,
   because the live limits cap any position, ETFs included, at 20%.
+
+## Phase 4: the evidence rules (`EVIDENCE_RULES=1`)
+
+Live trading confirms ideas; history is where they are tested. The switch
+also needs `LEARNING_ENABLED=1` and a filled `data/history.db`. Every
+threshold is in `config/lab.yaml` under `evidence:`. The code is in
+`arena/lab/evidence.py`, with small hooks in the learning layer:
+`review.py`, `lessons.py`, `decide.py`, `jobs.py` and `mcp_server.py`.
+
+| Rule | What the engine does |
+|---|---|
+| **Backtest tool** | In the **weekly** review the agents get `run_backtest`: their own `target_weights` code, run as a `design` run (any period before the holdout) or a `walk_forward` run. The holdout is not available. There are 20 runs per agent per week. Every run is logged with its attempt number for that idea |
+| **Daily review** | Observations and lesson hypotheses only: no backtests, no setting changes, no capital tilts, no rewrites. The hourly risk check can still reduce risk |
+| **Freeze** | A champion can't change (settings or rules) before it has 20 live trades **and** 3 weeks as champion |
+| **Challenger** | A rewrite must be code, with its `idea_key`. The engine then runs, in order: (1) a walk-forward with ≥ 100 out-of-sample trades and a better risk-adjusted score than the champion; (2) no market state worse than the champion by more than 10 percentage points a year; (3) the locked holdout, **once per idea** (a fail retires the idea for good); (4) shadow trading on new data until proven: ≥ 30 closed trades, a mean weekly score ≥ the champion's + 0.10, and a paired weekly bootstrap P(better) ≥ 80%. It is then promoted at once. Not proven in 12 weeks: retired. A new challenger for the slot replaces the old one, so its record starts from zero. Every step is in `promotion_log` (append-only) |
+| **Champion baseline** | The champion's own code if it has some. Today's champions are rules in words, which can't be backtested, so steps 1-3 compare against SPY buy-and-hold, and step 4 against the champion's real live record |
+| **Promotion** | The champion becomes the challenger's version and its code is saved for the slot, which from then on must be submitted as a `code` slot |
+| **Lessons** | Every lesson starts as a hypothesis and must cite evidence: graded live decisions and/or backtest runs. The engine summarizes each source: trades, period, market states, live or backtest. A lesson is confirmed only with a walk-forward run of ≥ 50 trades **and** ≥ 10 live trades. Unconfirmed after 6 weeks: retired. Only confirmed lessons reach the prompts as rules; the rest are shown as "unproven hypotheses". Lessons from before the rules count as hypotheses until confirmed |
+
+The shadow stage is judged every weekly review, and every night when
+`HISTORY_ENABLED=1` (after the day's bars), so a challenger is judged after
+every closed trade.
+
+### Dry run (no model calls, a throwaway copy)
+
+```bash
+python -m arena.lab evidence-dry-run --from data/arena.db --agent gpt --slot 1
+```
+
+A scripted agent plays a real weekly review. It calls `run_backtest` twice,
+then submits a code challenger and a lesson citing its walk-forward run. The
+engine runs the gates and starts the shadow stage. Because there is no new
+data yet, the shadow record is then replayed over the last 8 weeks: that
+shows the mechanics, not evidence. The command fails unless the champions,
+trades, positions and pending orders are unchanged and every step was
+logged. On the copy only, the strategy is flagged as having hit its
+drawdown limit (a rewrite trigger), and the cooldown and freeze are relaxed,
+since both would refuse a rewrite of a days-old strategy.

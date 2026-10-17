@@ -90,11 +90,23 @@ def weekly_review(conn: sqlite3.Connection, day: str, runner: review.Runner, dry
             continue
         with transaction(conn):
             verdicts = shadow.evaluate(conn, a, week_end, day)
+        rules = review._evidence()
+        if rules:
+            # Evidence rules: code challengers in shadow are judged on the data
+            # so far (also every night), and lessons need backtest + live evidence.
+            with transaction(conn), _history(conn) as hconn:
+                verdicts = verdicts + rules.evaluate_shadows(conn, hconn, a)
         res = review.run_review(conn, a, "weekly", day, runner, dry_run=dry_run)
         with transaction(conn):
-            promoted = lessons.promote_ready(conn, a)
+            promoted = rules.promote_lessons(conn, a) if rules else lessons.promote_ready(conn, a)
         out["agents"][a] = {"shadow": verdicts, "review": res, "lessons_promoted": promoted}
     return out
+
+
+def _history(conn: sqlite3.Connection):
+    from ..lab import config as labconfig, histdata
+    db = conn.execute("PRAGMA database_list").fetchone()[2]
+    return histdata.connect(labconfig.history_db_for(db) if db else None)
 
 
 def risk_check(conn: sqlite3.Connection, d: str, runner: review.Runner | None, dry_run: bool = False,

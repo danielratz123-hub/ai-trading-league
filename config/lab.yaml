@@ -63,3 +63,27 @@ holdout:
   # The most recent N months of data are locked: no design, walk-forward or
   # agent run may touch them. Only the one-time promotion check may.
   months: 12
+
+# Phase 4: evidence rules for the agents (arena/lab/evidence.py). Active only
+# with EVIDENCE_RULES=1 in .env (and LEARNING_ENABLED=1). Off = the learning
+# layer works exactly as before.
+evidence:
+  backtest_budget_per_agent_per_week: 20   # run_backtest calls per agent per (ET, ISO) week, weekly review only
+  freeze:                                  # a champion can't change before BOTH hold
+    min_live_trades: 20
+    min_weeks: 3
+  promotion:                               # a challenger (code) must pass all, in this order
+    min_oos_trades: 100                    # walk-forward out-of-sample trades
+    regime_margin_pct: 10.0                # per market state: annual return may trail the champion by at most this
+    min_state_days: 20                     # states with fewer out-of-sample days aren't compared
+    holdout_margin: 0.0                    # holdout risk-adjusted score >= champion's minus this (one try per idea)
+  shadow:                                  # then trades in shadow on new data until proven
+    min_trades: 30                         # closed shadow trades before any decision
+    score_margin: 0.10                     # beat the champion's mean weekly score by this
+    bootstrap_prob: 0.80                   # and P(truly better) >= this (paired weekly bootstrap)
+    bootstrap_samples: 2000
+    max_weeks: 12                          # not proven by then: retired
+  lessons:                                 # hypothesis -> confirmed only with BOTH
+    min_backtest_trades: 50                # out-of-sample (walk_forward) trades in a cited run
+    min_live_trades: 10                    # graded live trades among the cited decisions
+    hypothesis_max_weeks: 6                # unconfirmed after this: retired

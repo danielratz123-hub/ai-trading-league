@@ -18,6 +18,7 @@ The agent never touches the database: the engine applies what it asked for.
 """
 from __future__ import annotations
 
+import copy
 import json
 import math
 import re
@@ -43,6 +44,15 @@ MAX_TEXT = 2000
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _evidence():
+    """The backtest lab's evidence rules (Phase 4) when EVIDENCE_RULES=1, else None."""
+    from ..lab import config as labconfig
+    if not labconfig.evidence_enabled():
+        return None
+    from ..lab import evidence
+    return evidence
 
 
 def _r(x, nd=4):
@@ -110,6 +120,14 @@ def strategy_summary(conn: sqlite3.Connection, s: strat.Strategy, as_of: str, da
     if s.challenger:
         out["challenger"] = {"version": s.challenger["version"], "rules": s.challenger["rules_text"],
                              "params": s.challenger["params"], "hypothesis": s.challenger["hypothesis"]}
+    ev = _evidence()
+    if ev:
+        frozen, why, _ = ev.freeze_status(conn, s, as_of)
+        out["frozen"], out["freeze"] = frozen, why
+        if s.challenger:
+            sh = conn.execute("SELECT start_day, trades, score, champion_score, prob_better FROM lab_shadows "
+                              "WHERE version_id=?", (s.challenger["version_id"],)).fetchone()
+            out["challenger"]["shadow"] = dict(sh) if sh else None
     if weekly:
         c = lconfig.get().learning
         under, detail = strat.underperformed_spy(conn, s, c.underperform_spy_weeks)
@@ -142,12 +160,26 @@ def build_input(conn: sqlite3.Connection, agent_id: str, kind: str, as_of: str, 
                        for s in strat.active(conn, agent_id) if s.created_at <= as_of],
         "active_lessons": active,
     }
+    ev = _evidence()
+    if ev:
+        ev.ensure(conn)
+        for l in active:
+            l["evidence"] = ev.lesson_evidence(conn, l["id"])
     if kind in ("daily", "weekly"):
         prev = conn.execute("SELECT MAX(as_of) FROM review_runs WHERE agent_id=? AND kind=? AND status IN ('ok','fallback') "
                             "AND as_of < ? AND dry_run=0", (agent_id, kind, as_of)).fetchone()[0]
         since = prev or (datetime.fromisoformat(as_of) - timedelta(days=3 if kind == "daily" else 8)).isoformat()
         inp["graded_decisions_since_last_review"] = grader.outcomes_as_of(conn, agent_id, as_of, since=since)
         inp["candidate_lessons"] = lessons.candidates(conn, agent_id, as_of)
+        if ev:
+            # Hypotheses: candidates, and active lessons from before the rules that
+            # were never confirmed with backtest + live evidence.
+            done = ev.confirmed(conn)
+            extra = [l for l in lessons.active_all(conn, agent_id, as_of) if l["id"] not in done]
+            hyp = inp.pop("candidate_lessons") + extra
+            for l in hyp:
+                l["evidence"] = ev.lesson_evidence(conn, l["id"])
+            inp["unproven_hypotheses"] = hyp
         inp["limits"] = {"param_ranges": cfg.param_ranges, "max_tilt_pct": cfg.learning.max_tilt_pct,
                          "cooldown_weeks_after_change": cfg.learning.cooldown_weeks_after_change,
                          "lesson_confirmations_to_activate": cfg.learning.lesson_confirmations_to_activate}
@@ -167,6 +199,20 @@ def build_input(conn: sqlite3.Connection, agent_id: str, kind: str, as_of: str, 
                               "min_trades_for_rewrite": cfg.learning.min_trades_for_rewrite,
                               "underperform_spy_weeks": cfg.learning.underperform_spy_weeks,
                               "rewrites_used_this_week": strat.changes_this_week(conn, agent_id, as_of)})
+    if ev and kind == "weekly":
+        c = ev.cfg()
+        from ..lab import config as labconfig
+        inp["backtest"] = {"budget_left_this_week": ev.budget_left(conn, agent_id, as_of),
+                           "holdout_months": labconfig.get().holdout_months,
+                           "data_note": labconfig.get().survivorship_note}
+        inp["evidence_rules"] = {
+            "freeze": {"min_live_trades": c.freeze_min_live_trades, "min_weeks": c.freeze_min_weeks},
+            "challenger": {"min_oos_trades": c.min_oos_trades, "regime_margin_pct": c.regime_margin_pct,
+                           "shadow_min_trades": c.shadow_min_trades, "shadow_score_margin": c.shadow_score_margin,
+                           "shadow_bootstrap_prob": c.shadow_bootstrap_prob, "shadow_max_weeks": c.shadow_max_weeks},
+            "lessons": {"min_backtest_trades": c.lesson_min_backtest_trades,
+                        "min_live_trades": c.lesson_min_live_trades, "hypothesis_max_weeks": c.hypothesis_max_weeks}}
+        inp["challenger_status"] = ev.status(conn, agent_id)
     if kind == "risk":
         inp["situation"] = situation or {}
     return inp, [l["id"] for l in active]
@@ -254,6 +300,47 @@ RISK_SPEC = {
 
 SPECS = {"daily": DAILY_SPEC, "weekly": WEEKLY_SPEC, "risk": RISK_SPEC}
 
+# Under the evidence rules (EVIDENCE_RULES=1): the daily review only records
+# observations; a lesson may cite backtest runs; a rewrite must come as code.
+_LESSON_EV = copy.deepcopy(_LESSON)
+_LESSON_EV["properties"]["backtest_run_ids"] = {
+    "type": "array", "items": {"type": "integer"},
+    "description": "run_ids of your run_backtest results that support it (walk_forward runs count as evidence)"}
+_LESSON_EV["properties"]["evidence_decisions"]["description"] = (
+    "ids from graded_decisions_since_last_review that support it (live evidence)")
+_LESSON_EV["required"] = ["key", "lesson", "kind"]
+
+DAILY_SPEC_EV = {
+    "name": "submit_review",
+    "description": "Submit your daily review: observations only. Call it exactly once.",
+    "parameters": {"type": "object", "properties": {
+        "reasoning": {"type": "string"}, "confidence": {"type": "number", "description": "0-1"},
+        "strategy_notes": _SLOT_NOTES,
+        "lessons": {"type": "array", "items": _LESSON_EV},
+    }, "required": ["reasoning", "confidence"]},
+}
+WEEKLY_SPEC_EV = copy.deepcopy(WEEKLY_SPEC)
+WEEKLY_SPEC_EV["parameters"]["properties"]["lessons"] = {"type": "array", "items": _LESSON_EV}
+_RW = WEEKLY_SPEC_EV["parameters"]["properties"]["rewrite"]
+_RW["description"] = ("optional: at most one challenger for one strategy, AS CODE. The engine backtests it "
+                      "(walk-forward, per market state, the locked holdout once), then shadow-trades it until it is "
+                      "proven better; only then does it replace the champion.")
+_RW["properties"]["code"] = {"type": "string", "description": "Python defining target_weights(prices, date)"}
+_RW["properties"]["idea_key"] = {"type": "string", "description": "the idea_key you used with run_backtest"}
+_RW["required"] = ["slot", "rules", "hypothesis", "trigger", "code", "idea_key"]
+
+
+def spec_for(kind: str) -> dict:
+    if _evidence() is None:
+        return SPECS[kind]
+    return {"daily": DAILY_SPEC_EV, "weekly": WEEKLY_SPEC_EV, "risk": RISK_SPEC}[kind]
+
+
+def tools_for(kind: str) -> list[dict]:
+    """The review's tools: submit_review, plus run_backtest in the weekly review under the rules."""
+    ev = _evidence()
+    return [spec_for(kind)] + ([ev.BACKTEST_SPEC] if ev and kind == "weekly" else [])
+
 
 def _num(x) -> bool:
     return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
@@ -263,12 +350,17 @@ def _text(x, maxlen=MAX_TEXT) -> bool:
     return isinstance(x, str) and 0 < len(x.strip()) <= maxlen
 
 
+def _ints(v) -> bool:
+    return isinstance(v, list) and all(isinstance(x, int) and not isinstance(x, bool) for x in v)
+
+
 def validate_output(kind: str, raw, inp: dict) -> list[str]:
     """Structure only (types, sizes, slots that exist). Limits are applied
     later, so a limit breach is a logged rejection, not a retry."""
     e: list[str] = []
     if not isinstance(raw, dict):
         return ["The review must be a JSON object."]
+    rules_on = _evidence() is not None
     if not _text(raw.get("reasoning"), 4000):
         e.append("reasoning: a non-empty string (max 4000 characters) is required.")
     if not _num(raw.get("confidence")) or not 0 <= raw["confidence"] <= 1:
@@ -329,13 +421,23 @@ def validate_output(kind: str, raw, inp: dict) -> list[str]:
         if l.get("kind") not in lessons.KINDS:
             e.append(f"lessons[{i}].kind must be one of {', '.join(lessons.KINDS)}.")
         ev = l.get("evidence_decisions")
-        if not isinstance(ev, list) or not ev or not all(isinstance(x, int) and not isinstance(x, bool) for x in ev):
+        if rules_on:
+            runs_ = l.get("backtest_run_ids")
+            if (ev is not None and not _ints(ev)) or (runs_ is not None and not _ints(runs_)) or not (ev or runs_):
+                e.append(f"lessons[{i}] must cite evidence: evidence_decisions (graded decision ids) and/or "
+                         f"backtest_run_ids (your run_backtest run ids).")
+        elif not isinstance(ev, list) or not ev or not all(isinstance(x, int) and not isinstance(x, bool) for x in ev):
             e.append(f"lessons[{i}].evidence_decisions must be a non-empty list of decision ids.")
         if l.get("regime") is not None and l["regime"] not in lconfig.get().regime.labels:
             e.append(f"lessons[{i}].regime must be one of {', '.join(lconfig.get().regime.labels)}.")
         if l.get("slot") is not None:
             slot_ok(l.get("slot"), f"lessons[{i}]")
-    if kind == "daily":
+    if kind == "daily" and rules_on:
+        for k in ("tilt", "param_changes", "emergency_rewrites"):
+            if raw.get(k):
+                e.append(f"{k}: the daily review only records observations (strategy_notes, lessons); changes "
+                         f"go through the weekly review. The hourly risk check still cuts risk.")
+    if kind == "daily" and not rules_on:
         t = raw.get("tilt")
         if t is not None:
             if (not isinstance(t, dict) or not isinstance(t.get("allocations"), dict) or not _text(t.get("reason"), 600)
@@ -363,6 +465,10 @@ def validate_output(kind: str, raw, inp: dict) -> list[str]:
             if (not isinstance(rw, dict) or not _text(rw.get("rules"), 4000) or not _text(rw.get("hypothesis"), 2000)
                     or rw.get("trigger") not in ("underperform_spy", "drawdown_limit", "lesson")):
                 e.append("rewrite needs slot, rules, hypothesis and trigger (underperform_spy | drawdown_limit | lesson).")
+            elif rules_on and (not _text(rw.get("code"), 20000) or "target_weights" not in rw["code"]
+                               or not KEY.match(str(rw.get("idea_key", "")))):
+                e.append("rewrite needs `code` defining target_weights(prices, date) and an `idea_key` "
+                         "(lowercase-with-dashes): challengers are backtested before they trade in shadow.")
             else:
                 slot_ok(rw.get("slot"), "rewrite")
     return e
@@ -394,8 +500,26 @@ Allowed actions only: reduce (sell a fraction of a position), close (a whole pos
 }
 
 
+INTRO_EV = {
+    "daily": """You are "{agent}" in the AI Trading League. This is your DAILY REVIEW after today's close. Under the evidence rules it only RECORDS OBSERVATIONS: no backtests, no strategy, param or capital changes (those go through the weekly review; the hourly risk check still cuts risk).
+
+You may add strategy_notes and lessons. Every lesson starts as an UNPROVEN HYPOTHESIS and must cite evidence: evidence_decisions (ids from graded_decisions_since_last_review). Reuse a key to add evidence to an existing hypothesis. Only hypotheses later supported by BOTH a walk-forward backtest and enough live trades become confirmed rules (see unproven_hypotheses for what each has so far).
+Give reasoning and a confidence (0-1).""",
+    "weekly": """You are "{agent}" in the AI Trading League. This is your WEEKLY REVIEW. Your weekly portfolio decision follows right after it, so don't pick positions here. Live trading confirms ideas; history is where you test them.
+
+Tools: run_backtest (test ideas on daily history since 2016; budget in backtest.budget_left_this_week; the most recent months are a locked holdout) and submit_review (call once at the end).
+
+You may (all optional, every rule is enforced by the engine and refused changes are logged):
+1. lessons / retire_lessons: lessons are hypotheses until confirmed. Cite evidence: evidence_decisions (graded live decisions) and/or backtest_run_ids (your run_backtest runs). A hypothesis becomes a confirmed rule only with a walk-forward run of >= evidence_rules.lessons.min_backtest_trades trades AND >= min_live_trades live trades; unconfirmed after hypothesis_max_weeks it is retired. Only confirmed lessons (active_lessons) are rules.
+2. param_changes: within limits.param_ranges, only for strategies that are not frozen (see each strategy's `freeze`).
+3. rewrite: at most ONE challenger, written AS CODE (target_weights(prices, date)) with the idea_key you backtested it under, for a strategy that is not frozen and has a trigger. The engine then runs, in order: a walk-forward with >= evidence_rules.challenger.min_oos_trades out-of-sample trades and a better score than your champion; no market state worse than the champion by more than regime_margin_pct; the locked holdout ONCE (fail = the idea is retired for good); then shadow trading (no money) until proven. Many tries per idea are visible next to the results.
+Give reasoning and a confidence (0-1).""",
+}
+
+
 def render_prompt(kind: str, inp: dict) -> str:
-    return (INTRO[kind].format(agent=inp["agent"]) + "\n\nINPUT (JSON):\n" + json.dumps(inp, indent=1, default=str)
+    intro = INTRO_EV.get(kind) if _evidence() is not None else None
+    return ((intro or INTRO[kind]).format(agent=inp["agent"]) + "\n\nINPUT (JSON):\n" + json.dumps(inp, indent=1, default=str)
             + "\n\nCall the submit_review tool (MCP server \"arena\") exactly once with your answer.")
 
 
@@ -419,14 +543,17 @@ class Runner(Protocol):
 MAX_ATTEMPTS = 2   # the first answer + one retry; then fall back to hold
 
 
-def adapter_runner(factory) -> Runner:
-    """AGENT_BACKEND=api: a pay-per-token adapter, the submit tool only."""
+def adapter_runner(factory, db_path: str | None = None) -> Runner:
+    """AGENT_BACKEND=api: a pay-per-token adapter, the submit tool only (plus
+    run_backtest in the weekly review under the evidence rules)."""
     def run(agent_id: str, kind: str, prompt: str, inp: dict) -> RunnerResult:
         adapter = factory(agent_id)
         res = RunnerResult(None)
+        tools = tools_for(kind)
         adapter.start("You are a careful portfolio manager. Answer only through the submit_review tool.",
-                      prompt, [SPECS[kind]], False, 0)
+                      prompt, tools, False, 0)
         nudges = 0
+        tool_steps = 0
         while res.attempts < MAX_ATTEMPTS:
             try:
                 step = adapter.step()
@@ -434,6 +561,12 @@ def adapter_runner(factory) -> Runner:
                 res.error = f"API error ({type(e).__name__}): {str(e)[:300]}"
                 return res
             res.usage.add(step.usage)
+            bt = [c for c in step.tool_calls if c.name == "run_backtest"]
+            if bt and len(tools) > 1 and tool_steps < 40:
+                tool_steps += 1
+                adapter.send_tool_results([(c, json.dumps(run_backtest_tool(db_path, agent_id, c.args or {}),
+                                                         default=str), False) for c in bt])
+                continue
             calls = [c for c in step.tool_calls if c.name == "submit_review"]
             if not calls:
                 if nudges >= 2:
@@ -479,7 +612,9 @@ def cli_runner(factory, db_path: str) -> Runner:
         res = RunnerResult(None)
         runs: list[CliRun] = []
         try:
-            runs.append(agent.run(prompt, workdir, mcp, web_search=False, timeout=SETTINGS.report_timeout_sec))
+            # Backtests take time: a weekly review with run_backtest gets up to an hour.
+            timeout = SETTINGS.report_timeout_sec if len(tools_for(kind)) == 1 else max(SETTINGS.report_timeout_sec, 3600)
+            runs.append(agent.run(prompt, workdir, mcp, web_search=False, timeout=timeout))
             state = _read(result_path)
             if not state.get("accepted") and state.get("attempts", 0) < MAX_ATTEMPTS and runs[-1].session_id \
                     and "timed out" not in (runs[-1].error or ""):
@@ -505,6 +640,22 @@ def cli_runner(factory, db_path: str) -> Runner:
     return run
 
 
+def run_backtest_tool(db_path: str | None, agent_id: str, args: dict) -> dict:
+    """The run_backtest tool, for both runners (the CLI one through the MCP server)."""
+    from ..config import SETTINGS
+    from ..db import connect
+    from ..lab import config as labconfig, evidence, histdata
+    db = db_path or str(SETTINGS.db_path)
+    conn, hconn = connect(db), histdata.connect(labconfig.history_db_for(db))
+    try:
+        return evidence.agent_backtest(conn, hconn, agent_id, args)
+    except Exception as e:  # noqa: BLE001 - a tool error goes back to the agent
+        return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:400]}"}
+    finally:
+        conn.close()
+        hconn.close()
+
+
 def _read(path) -> dict:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -515,7 +666,7 @@ def _read(path) -> dict:
 def default_runner(db_path: str) -> Runner:
     from ..agents import make_agent
     from ..config import SETTINGS
-    return cli_runner(make_agent, db_path) if SETTINGS.agent_backend == "cli" else adapter_runner(make_agent)
+    return cli_runner(make_agent, db_path) if SETTINGS.agent_backend == "cli" else adapter_runner(make_agent, db_path)
 
 
 # ==========================================================================
@@ -556,16 +707,22 @@ def _visible_decisions(ctx: Ctx) -> set[int]:
 
 def apply_lessons(ctx: Ctx, raw: dict) -> None:
     visible = _visible_decisions(ctx)
+    rules = _evidence()
     for l in raw.get("lessons") or []:
-        ev = [i for i in l["evidence_decisions"] if i in visible]
-        if not ev:
-            ctx.reject(l.get("slot"), "lesson", l, "no valid evidence: cite ids of your decisions that were already graded")
+        ev = [i for i in (l.get("evidence_decisions") or []) if i in visible]
+        run_ids = [r for r in (l.get("backtest_run_ids") or []) if isinstance(r, int)] if rules else []
+        if not ev and not run_ids:
+            ctx.reject(l.get("slot"), "lesson", l, "no valid evidence: cite ids of your decisions that were already graded"
+                       + (" or your backtest run ids" if rules else ""))
             continue
         s = strat.in_slot(ctx.conn, ctx.agent_id, l["slot"]) if l.get("slot") is not None else None
         lid, what = lessons.upsert(ctx.conn, agent_id=ctx.agent_id, key=l["key"], lesson=l["lesson"], kind=l["kind"],
                                    evidence=ev, day=ctx.day, regime=l.get("regime"),
                                    strategy_id=s.strategy_id if s else None, at=ctx.as_of)
-        ctx.applied.append(f"lesson {l['key']} (#{lid}): {what}")
+        if rules:
+            for note in rules.record_lesson_evidence(ctx.conn, ctx.agent_id, lid, ev, run_ids, ctx.as_of):
+                ctx.reject(l.get("slot"), "lesson_evidence", {"key": l["key"]}, note)
+        ctx.applied.append(f"lesson {l['key']} (#{lid}): {what}" + (" (hypothesis)" if rules else ""))
 
 
 def apply_params(ctx: Ctx, raw: dict) -> set[int]:
@@ -574,6 +731,12 @@ def apply_params(ctx: Ctx, raw: dict) -> set[int]:
         s = strat.in_slot(ctx.conn, ctx.agent_id, p["slot"])
         errs = strat.check_params(p["params"])
         cool, why = strat.in_cooldown(ctx.conn, s.strategy_id, ctx.as_of)
+        rules = _evidence()
+        if rules and not errs:
+            frozen, fwhy, _ = rules.freeze_status(ctx.conn, s, ctx.as_of)
+            if frozen:
+                ctx.reject(p["slot"], "param", p, fwhy)
+                continue
         if errs:
             ctx.reject(p["slot"], "param", p, "; ".join(errs))
         elif cool:
@@ -717,12 +880,28 @@ def apply_weekly(ctx: Ctx, raw: dict) -> None:
             ctx.reject(rw["slot"], "rewrite", rw, "; ".join(errs))
         elif not ok:
             ctx.reject(rw["slot"], "rewrite", rw, why)
+        elif _evidence() is not None:
+            hconn = _history_conn(ctx)
+            try:
+                accepted, msg, vid = _evidence().propose(ctx.conn, hconn, ctx.agent_id, s, rw, ctx.as_of, _week(ctx.conn))
+            finally:
+                hconn.close()
+            if accepted:
+                ctx.applied.append(f"slot {rw['slot']}: {msg}")
+            else:
+                ctx.reject(rw["slot"], "rewrite", {k: v for k, v in rw.items() if k != "code"}, msg)
         else:
             vid = strat.add_version(ctx.conn, s.strategy_id, rw["rules"], params, "weekly_rewrite",
                                     f"trigger {rw['trigger']}: {why}", "challenger", _week(ctx.conn),
                                     hypothesis=rw["hypothesis"], at=ctx.as_of)
             ctx.applied.append(f"slot {rw['slot']}: challenger v{strat.version_row(ctx.conn, vid)['version']} "
                                f"created (shadow test next week)")
+
+
+def _history_conn(ctx: Ctx):
+    from ..lab import config as labconfig, histdata
+    db = ctx.conn.execute("PRAGMA database_list").fetchone()[2]
+    return histdata.connect(labconfig.history_db_for(db) if db else None)
 
 
 def _record_rows(ctx: Ctx, raw: dict | None, fallback_error: str | None,
@@ -796,7 +975,9 @@ def _run_review(conn, agent_id, kind, day, runner, as_of, dry_run, situation, on
         fallback_error = (res.error or "invalid output") + (": " + "; ".join(res.errors)[:600] if res.errors else "")
     with transaction(conn):
         tilt, changed = {}, set()
-        if res.output is not None and kind != "risk":
+        if res.output is not None and kind == "daily" and _evidence() is not None:
+            apply_lessons(ctx, res.output)            # observations only
+        elif res.output is not None and kind != "risk":
             apply_lessons(ctx, res.output)
             changed = apply_params(ctx, res.output)
             if kind == "daily":

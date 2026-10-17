@@ -69,12 +69,26 @@ def retire(conn: sqlite3.Connection, agent_id: str, lesson_id: int, reason: str,
 
 
 def for_prompt(conn: sqlite3.Connection, agent_id: str, regime: str | None, as_of: str) -> list[dict]:
-    """Active lessons for the current regime (or any regime), as of a time."""
+    """Active lessons for the current regime (or any regime), as of a time.
+    Under the evidence rules (EVIDENCE_RULES=1) only lessons confirmed with
+    backtest + live evidence count as active: they are the agents' rules."""
     cap = lconfig.get().learning.max_lessons_in_prompt
+    from ..lab import config as labconfig
+    only = ""
+    if labconfig.evidence_enabled():
+        from ..lab import evidence
+        evidence.ensure(conn)
+        only = " AND id IN (SELECT lesson_id FROM lesson_confirmations)"
     rows = conn.execute(
         "SELECT * FROM lessons WHERE agent_id=? AND status='active' AND created_at < ? AND updated_at < ? "
-        "AND (regime IS NULL OR regime = ?) ORDER BY times_confirmed DESC, updated_at DESC LIMIT ?",
+        "AND (regime IS NULL OR regime = ?)" + only + " ORDER BY times_confirmed DESC, updated_at DESC LIMIT ?",
         (agent_id, as_of, as_of, regime, cap)).fetchall()
+    return [_public(r) for r in rows]
+
+
+def active_all(conn: sqlite3.Connection, agent_id: str, as_of: str) -> list[dict]:
+    rows = conn.execute("SELECT * FROM lessons WHERE agent_id=? AND status='active' AND created_at < ? "
+                        "ORDER BY updated_at DESC LIMIT 20", (agent_id, as_of)).fetchall()
     return [_public(r) for r in rows]
 
 

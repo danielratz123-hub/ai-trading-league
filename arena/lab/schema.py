@@ -75,6 +75,81 @@ CREATE TABLE IF NOT EXISTS backtest_trades (
 );
 CREATE INDEX IF NOT EXISTS idx_backtest_trades_run ON backtest_trades(run_id);
 
+-- ------------------------------------------------ Phase 4 (evidence rules)
+-- The code of a strategy version (a challenger must come as code).
+CREATE TABLE IF NOT EXISTS strategy_version_code (
+    version_id   INTEGER PRIMARY KEY REFERENCES strategy_versions(id),
+    idea_key     TEXT NOT NULL,
+    code         TEXT NOT NULL,
+    code_sha256  TEXT NOT NULL,
+    created_at   TEXT NOT NULL
+);
+-- Every step of every challenger: passed or not, and why. Append-only.
+CREATE TABLE IF NOT EXISTS promotion_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          TEXT NOT NULL,
+    agent_id    TEXT NOT NULL,
+    slot        INTEGER,
+    version_id  INTEGER,
+    idea_key    TEXT,
+    stage       TEXT NOT NULL CHECK (stage IN ('proposed', 'freeze', 'walk_forward', 'regimes', 'holdout',
+                                               'shadow_started', 'shadow', 'promoted', 'retired')),
+    passed      INTEGER NOT NULL,
+    reason      TEXT NOT NULL,
+    detail      TEXT NOT NULL DEFAULT '{}',
+    run_ids     TEXT NOT NULL DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS idx_promotion_log ON promotion_log(agent_id, version_id, id);
+CREATE TRIGGER IF NOT EXISTS promotion_log_frozen BEFORE UPDATE ON promotion_log
+BEGIN SELECT RAISE(ABORT, 'promotion_log is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS promotion_log_no_delete BEFORE DELETE ON promotion_log
+BEGIN SELECT RAISE(ABORT, 'promotion_log is append-only'); END;
+-- An idea that failed its holdout (or timed out in shadow) can't come back.
+CREATE TABLE IF NOT EXISTS retired_ideas (
+    idea_key     TEXT PRIMARY KEY,
+    code_sha256  TEXT,
+    reason       TEXT NOT NULL,
+    ts           TEXT NOT NULL
+);
+-- A code challenger trading in shadow (no capital) on data after its start.
+CREATE TABLE IF NOT EXISTS lab_shadows (
+    version_id          INTEGER PRIMARY KEY REFERENCES strategy_versions(id),
+    agent_id            TEXT NOT NULL,
+    slot                INTEGER NOT NULL,
+    champion_version_id INTEGER NOT NULL,
+    idea_key            TEXT NOT NULL,
+    start_day           TEXT NOT NULL,      -- the shadow record counts from here
+    status              TEXT NOT NULL CHECK (status IN ('running', 'promoted', 'retired')),
+    last_eval_day       TEXT,
+    trades              INTEGER NOT NULL DEFAULT 0,
+    score               REAL,
+    champion_score      REAL,
+    prob_better         REAL,
+    detail              TEXT NOT NULL DEFAULT '{}',
+    started_at          TEXT NOT NULL,
+    finished_at         TEXT
+);
+-- What a lesson rests on: live decisions and/or backtest runs, summarized.
+CREATE TABLE IF NOT EXISTS lesson_evidence (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    lesson_id     INTEGER NOT NULL REFERENCES lessons(id),
+    source        TEXT NOT NULL CHECK (source IN ('live', 'backtest')),
+    ref           TEXT NOT NULL,          -- JSON decision ids, or the run id
+    trades        INTEGER NOT NULL,
+    period_start  TEXT,
+    period_end    TEXT,
+    regime        TEXT,                   -- market state(s) the evidence comes from
+    purpose       TEXT,                   -- backtest: design | walk_forward
+    added_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_lesson_evidence ON lesson_evidence(lesson_id);
+-- Lessons confirmed under the evidence rules (only these reach prompts as rules).
+CREATE TABLE IF NOT EXISTS lesson_confirmations (
+    lesson_id     INTEGER PRIMARY KEY REFERENCES lessons(id),
+    confirmed_at  TEXT NOT NULL,
+    detail        TEXT NOT NULL
+);
+
 CREATE VIEW IF NOT EXISTS trade_market_states AS
 SELECT t.id AS trade_id, t.agent_id, t.slot, t.date, t.ticker, t.reason,
        (SELECT m.label FROM market_states m WHERE m.day < t.date ORDER BY m.day DESC LIMIT 1) AS market_state
@@ -111,5 +186,25 @@ GROUP BY r.purpose, r.requested_by, r.strategy_name, bt.entry_state;
 """
 
 
+def _statements(sql: str) -> list[str]:
+    out, buf = [], ""
+    for line in sql.splitlines(keepends=True):
+        buf += line
+        if sqlite3.complete_statement(buf):
+            out.append(buf.strip())
+            buf = ""
+    return [s for s in out if s]
+
+
+_STATEMENTS = _statements(SCHEMA)
+
+
 def migrate(conn: sqlite3.Connection) -> None:
-    conn.executescript(SCHEMA)
+    """Create the lab tables. Statement by statement on purpose:
+    executescript() would COMMIT first, ending a caller's transaction (the
+    league runs reviews inside savepoints). Cheap once the tables exist."""
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='lesson_confirmations'").fetchone() \
+            and conn.execute("SELECT 1 FROM sqlite_master WHERE type='view' AND name='strategy_by_market_state'").fetchone():
+        return
+    for st in _STATEMENTS:
+        conn.execute(st)

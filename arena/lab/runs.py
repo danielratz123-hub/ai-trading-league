@@ -33,6 +33,14 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _commit(conn: sqlite3.Connection) -> None:
+    """Commit on a normal connection. The league's connections (db.connect)
+    autocommit and nest work in savepoints: committing there would end the
+    caller's transaction (e.g. a weekly review applying a rewrite) midway."""
+    if conn.isolation_level is not None:
+        conn.commit()
+
+
 def attempts(conn: sqlite3.Connection, idea_key: str) -> int:
     return conn.execute("SELECT COUNT(*) FROM backtest_runs WHERE idea_key=? AND purpose != 'check'",
                         (idea_key,)).fetchone()[0]
@@ -61,7 +69,7 @@ def _begin(conn, *, requested_by: str, idea_key: str, spec: engine.StrategySpec,
         (requested_by, idea_key, n, spec.name, version_id, spec.sha256(), json.dumps(params, sort_keys=True), purpose,
          start, end, status, error, json.dumps(_settings()), labconfig.get().survivorship_note, _now(),
          None if status == "running" else _now()))
-    conn.commit()
+    _commit(conn)
     return cur.lastrowid, n
 
 
@@ -75,16 +83,19 @@ def _finish(conn, run_id: int, status: str, results: dict | None = None, error: 
               t["shares"], t["pnl"], t["pnl_pct"], t["exit_reason"], t["entry_state"]) for t in trades])
     conn.execute("UPDATE backtest_runs SET status=?, results=?, error=?, finished_at=? WHERE id=?",
                  (status, None if results is None else json.dumps(results, default=str), error, _now(), run_id))
-    conn.commit()
+    _commit(conn)
 
 
 def execute(conn: sqlite3.Connection, hconn: sqlite3.Connection, *, spec: engine.StrategySpec | None = None,
             make: Callable[[dict], engine.StrategySpec] | None = None, grid: list[dict] | None = None,
             purpose: str, idea_key: str, requested_by: str, start: str | None = None, end: str | None = None,
             version_id: int | None = None, options: engine.Options | None = None,
-            frame: pd.DataFrame | None = None) -> dict:
+            frame: pd.DataFrame | None = None, walk: bool = False) -> dict:
     """Run and log one backtest. Returns the results (with attempts and the
-    survivorship note) or {"ok": False, "error"/"refused": ...}."""
+    survivorship note) or {"ok": False, "error"/"refused": ...}.
+    walk=True with purpose 'check': a walk-forward used as a baseline (e.g.
+    the champion or SPY next to a challenger); it never counts as an attempt."""
+    walk = walk or purpose == "walk_forward"
     if purpose not in PURPOSES:
         raise ValueError(f"purpose must be one of {PURPOSES}")
     schema.migrate(conn)
@@ -111,7 +122,7 @@ def execute(conn: sqlite3.Connection, hconn: sqlite3.Connection, *, spec: engine
                     "run_id": rid, "attempts": n}
     else:
         start = start or first
-        end = end or (d_end if purpose == "check" else
+        end = end or (d_end if purpose == "check" and not walk else
                       (pd.Timestamp(locked) - pd.Timedelta(days=1)).strftime("%Y-%m-%d"))
         if purpose != "check":
             try:
@@ -127,7 +138,7 @@ def execute(conn: sqlite3.Connection, hconn: sqlite3.Connection, *, spec: engine
         frame = frame if frame is not None else walkforward.load(hconn, end)
         frame = frame.loc[:end]
         labels = state_labels(conn, end=end)
-        if purpose == "walk_forward":
+        if walk:
             out = walkforward.walk_forward(make, grid or [{}], frame, labels, start, locked, options)
             res, trades = out["out_of_sample"], out["trades"]
             res = {**res, "windows": out["windows"], "grid_size": out["grid_size"]}

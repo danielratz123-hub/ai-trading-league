@@ -66,6 +66,25 @@ class WalkForward:
 
 
 @dataclass(frozen=True)
+class Evidence:
+    backtest_budget: int
+    freeze_min_live_trades: int
+    freeze_min_weeks: int
+    min_oos_trades: int
+    regime_margin_pct: float
+    min_state_days: int
+    holdout_margin: float
+    shadow_min_trades: int
+    shadow_score_margin: float
+    shadow_bootstrap_prob: float
+    shadow_bootstrap_samples: int
+    shadow_max_weeks: int
+    lesson_min_backtest_trades: int
+    lesson_min_live_trades: int
+    hypothesis_max_weeks: int
+
+
+@dataclass(frozen=True)
 class LabConfig:
     history: History
     survivorship_note: str
@@ -74,6 +93,21 @@ class LabConfig:
     engine: Engine
     walk_forward: WalkForward
     holdout_months: int
+    evidence: Evidence
+
+
+def _evidence(ev: dict) -> Evidence:
+    fz, pr, sh, ls = ev["freeze"], ev["promotion"], ev["shadow"], ev["lessons"]
+    out = Evidence(int(ev["backtest_budget_per_agent_per_week"]), int(fz["min_live_trades"]), int(fz["min_weeks"]),
+                   int(pr["min_oos_trades"]), float(pr["regime_margin_pct"]), int(pr["min_state_days"]),
+                   float(pr["holdout_margin"]), int(sh["min_trades"]), float(sh["score_margin"]),
+                   float(sh["bootstrap_prob"]), int(sh["bootstrap_samples"]), int(sh["max_weeks"]),
+                   int(ls["min_backtest_trades"]), int(ls["min_live_trades"]), int(ls["hypothesis_max_weeks"]))
+    if not 0.5 <= out.shadow_bootstrap_prob < 1:
+        raise ConfigError("evidence.shadow.bootstrap_prob must be in [0.5, 1)")
+    if min(out.backtest_budget, out.shadow_bootstrap_samples, out.shadow_max_weeks) < 1:
+        raise ConfigError("evidence: budget, bootstrap_samples and max_weeks must be >= 1")
+    return out
 
 
 def parse(raw: dict) -> LabConfig:
@@ -92,6 +126,7 @@ def parse(raw: dict) -> LabConfig:
                           int(e["min_history_days"])),
             walk_forward=WalkForward(int(wf["design_months"]), int(wf["test_months"]), int(wf["step_months"])),
             holdout_months=int(raw["holdout"]["months"]),
+            evidence=_evidence(raw["evidence"]),
         )
     except KeyError as err:
         raise ConfigError(f"config/lab.yaml is missing {err}") from None
@@ -126,6 +161,18 @@ def history_db_path() -> Path:
     """data/history.db next to the live database, unless HISTORY_DB says otherwise."""
     env = os.getenv("HISTORY_DB", "").strip()
     return Path(env) if env else SETTINGS.db_path.with_name(get().history.db_file)
+
+
+def history_db_for(arena_db: str | Path) -> Path:
+    """history.db next to a given league database (the MCP server gets --db)."""
+    env = os.getenv("HISTORY_DB", "").strip()
+    return Path(env) if env else Path(arena_db).with_name(get().history.db_file)
+
+
+def evidence_enabled() -> bool:
+    """EVIDENCE_RULES=1 (with LEARNING_ENABLED=1) switches Phase 4 on. Read at call time."""
+    from ..learning import config as lconfig
+    return os.getenv("EVIDENCE_RULES", "0").strip() == "1" and lconfig.enabled()
 
 
 def history_enabled() -> bool:

@@ -65,7 +65,7 @@ MAX_ATTEMPTS = 3
 RETRY_AFTER = timedelta(minutes=30)
 TIMEOUTS = {"decide": 3 * 3600, "execute": 1800, "daily": 3600, "update-calendar": 600,
             "backup": 1800, "check-logins": 1200, "reports": 3600, "reconcile": 600, "heartbeat": 300, "morning-report": 300,
-            "risk-check": 1800, "daily-review": 3600, "weekly-review": 3600,
+            "risk-check": 1800, "daily-review": 3600, "weekly-review": 3 * 3600,
             "history-update": 3600}
 RISK_CHECK_WINDOW = timedelta(minutes=30)   # a risk check later than this is skipped, not replayed
 WEEKLY_REVIEW_GRACE = timedelta(hours=4)    # decide stops waiting for a failing weekly review
