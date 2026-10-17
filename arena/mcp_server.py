@@ -215,15 +215,19 @@ class ReviewServer:
         self.inp = json.loads(Path(args.review_input).read_text(encoding="utf-8"))
         self.result_path = Path(args.result)
         self.state = {"accepted": False, "output": None, "attempts": 0, "last_errors": []}
-        self.specs = [review.SPECS[self.kind]]
+        self.specs = review.tools_for(self.kind)      # + run_backtest in the weekly review (evidence rules)
+        self.db, self.agent_id = getattr(args, "db", None), getattr(args, "agent", None)
         self._save()
 
     _save = TurnServer._save
     list_tools = TurnServer.list_tools
 
     def call(self, name: str, arguments: dict) -> tuple[str, bool]:
+        if name == "run_backtest" and len(self.specs) > 1:
+            res = self.review.run_backtest_tool(self.db, self.agent_id, arguments or {})
+            return json.dumps(res, default=str), not res.get("ok")
         if name != "submit_review":
-            return f"Unknown tool {name!r}: only submit_review is available.", True
+            return f"Unknown tool {name!r}: only {', '.join(s['name'] for s in self.specs)} available.", True
         s = self.state
         if s["accepted"]:
             return "Ignored: your review was already accepted.", True

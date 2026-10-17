@@ -100,3 +100,42 @@ def tilt_allowed(history: Sequence[tuple[str, str | None]], confirm_days: int,
     if last_tilt_day is not None and run.started is not None and last_tilt_day >= run.started:
         return False, f"already tilted on {last_tilt_day} during this {run.label} run"
     return True, f"{run.label} since {run.started} ({run.days_held} days)"
+
+
+# --------------------------------------------------------------------------
+# Market state from SPY only (the backtest lab, config/lab.yaml `market_state:`)
+# --------------------------------------------------------------------------
+# A second, simpler label next to the four above (which also use the VIX and
+# drive the live daily-review tilts). This one uses SPY's closes and nothing
+# else, so it can be computed for every day since 2016 from the same data
+# as every live day, by this one function:
+#
+#   trend  up    SPY close >  its trend_sma_days (200) average
+#          down  SPY close <= that average
+#   vol    low     20-day realized vol (annualized) <  vol_low_below (12%)
+#          high    20-day realized vol              >= vol_high_at (25%)
+#          normal  in between
+#   label  "<trend>_<vol>", e.g. up_low, down_high (six labels)
+#
+# With fewer than trend_sma_days closes there is no label (None).
+
+TRENDS = ("up", "down")
+VOLS = ("low", "normal", "high")
+MARKET_STATES = tuple(f"{t}_{v}" for t in TRENDS for v in VOLS)
+
+
+def classify_spy(spy_closes: Sequence[float], cfg) -> tuple[str | None, dict]:
+    """(label, the numbers used). spy_closes: oldest first, ending at the day
+    labelled. cfg: anything with trend_sma_days, vol_days, vol_low_below,
+    vol_high_at (arena.lab.config.MarketState)."""
+    closes = [float(x) for x in spy_closes if x is not None]
+    need = max(cfg.trend_sma_days, cfg.vol_days + 1)
+    if len(closes) < need:
+        return None, {"reason": f"need {need} closes, have {len(closes)}"}
+    close = closes[-1]
+    sma = sum(closes[-cfg.trend_sma_days:]) / cfg.trend_sma_days
+    rv = realized_vol(closes, cfg.vol_days)
+    trend = "up" if close > sma else "down"
+    vol = "low" if rv < cfg.vol_low_below else "high" if rv >= cfg.vol_high_at else "normal"
+    return f"{trend}_{vol}", {"spy_close": round(close, 4), f"sma_{cfg.trend_sma_days}": round(sma, 4),
+                              "realized_vol": round(rv, 4), "trend": trend, "vol": vol}

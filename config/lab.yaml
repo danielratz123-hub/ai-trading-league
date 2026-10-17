@@ -1,0 +1,115 @@
+# The backtesting lab (arena/lab/): historical data, SPY-only market-state
+# labels and the backtest engine.
+#
+# HUMAN-EDITED ONLY. No agent tool writes files, and agent code runs in the
+# sandbox, which cannot open this file. Cost assumptions, regime rules,
+# walk-forward windows and the holdout are therefore out of the agents'
+# reach. The hard risk limits are NOT repeated here: the engine reads them
+# from config/learning.yaml (hard_limits:), the same numbers the live league
+# enforces, so there is one source.
+#
+# Read once per process.
+
+history:
+  # Separate SQLite file next to arena.db (data/history.db; HISTORY_DB in
+  # .env overrides). Never mixed with the live `prices` table: the league
+  # trades on IEX bars, this is the SIP feed (all US exchanges) from 2016.
+  db_file: history.db
+  start: "2016-01-01"           # Alpaca's SIP daily history starts 2016-01-04
+  feed: sip                     # no IEX fallback: IEX history only starts ~2020
+  batch_symbols: 50             # symbols per request (the SDK pages through them)
+  requests_per_minute: 120      # Alpaca's free plan allows 200
+  max_retries: 5                # per batch, with exponential backoff
+  overlap_days: 10              # nightly update re-reads this many days to catch splits/dividends
+  nightly_update_at: "19:00"    # ET, trading days (only when HISTORY_ENABLED=1)
+  # Symbols downloaded on top of the league universe (S&P 500 + its ETFs).
+  extra_symbols: [VIXY]
+
+survivorship_note: >-
+  Survivorship bias: the backtest universe is TODAY's S&P 500 list. Companies
+  that were dropped from the index, went bankrupt or were bought out since 2016
+  are missing, and today's members are known winners. Historical results are
+  therefore optimistic; treat them as an upper bound, not a forecast.
+
+# Market-state labels from SPY only (arena/learning/regime.classify_spy).
+# The same function labels every historical day and every live day.
+market_state:
+  trend_sma_days: 200           # SPY close above its 200-day average -> up, else down
+  vol_days: 20                  # realized volatility window (annualized, close-to-close)
+  vol_low_below: 0.12           # < 12% annualized -> low
+  vol_high_at: 0.25             # >= 25% -> high; in between -> normal
+
+costs:
+  # Per side, on top of the league's commission model (arena/costs.py).
+  # Conservative on purpose: S&P 500 names usually trade tighter.
+  spread_bps_per_side: 5
+  slippage_bps_per_side: 5
+  # Names whose 20-day average dollar volume is below this get whole shares
+  # only (no fractional fills).
+  fractional_min_dollar_volume: 20000000
+
+engine:
+  starting_cash: 1000.0
+  rebalance: weekly             # weekly = decide at the week's last close, fill next open (the league's rhythm); daily also allowed
+  stop_fill: stop_or_open       # stop hit intraday -> fill at the stop, or at the open if it gapped through
+  min_history_days: 200         # first decision only once this many bars exist (the 200-day average)
+
+walk_forward:
+  design_months: 24             # in-sample window the idea is designed / tuned on
+  test_months: 6                # following out-of-sample window
+  step_months: 6                # roll forward by this much
+
+holdout:
+  # The most recent N months of data are locked: no design, walk-forward or
+  # agent run may touch them. Only the one-time promotion check may.
+  months: 12
+
+# Phase 4: evidence rules for the agents (arena/lab/evidence.py). Active only
+# with EVIDENCE_RULES=1 in .env (and LEARNING_ENABLED=1). Off = the learning
+# layer works exactly as before.
+evidence:
+  backtest_budget_per_agent_per_week: 20   # run_backtest calls per agent per (ET, ISO) week, weekly review only
+  freeze:                                  # a champion can't change before BOTH hold
+    min_live_trades: 20
+    min_weeks: 3
+  promotion:                               # a challenger (code) must pass all, in this order
+    min_oos_trades: 100                    # walk-forward out-of-sample trades
+    regime_margin_pct: 10.0                # per market state: annual return may trail the champion by at most this
+    min_state_days: 20                     # states with fewer out-of-sample days aren't compared
+    holdout_margin: 0.0                    # holdout risk-adjusted score >= champion's minus this (one try per idea)
+  shadow:                                  # then trades in shadow on new data until proven
+    min_trades: 30                         # closed shadow trades before any decision
+    score_margin: 0.10                     # beat the champion's mean weekly score by this
+    bootstrap_prob: 0.80                   # and P(truly better) >= this (paired weekly bootstrap)
+    bootstrap_samples: 2000
+    max_weeks: 12                          # not proven by then: retired
+  lessons:                                 # hypothesis -> confirmed only with BOTH
+    min_backtest_trades: 50                # out-of-sample (walk_forward) trades in a cited run
+    min_live_trades: 10                    # graded live trades among the cited decisions
+    hypothesis_max_weeks: 6                # unconfirmed after this: retired
+
+# Phase 5: the adaptive layer (arena/lab/adaptive.py). BACKTEST ONLY for now:
+# nothing here is wired into the live league. Going live needs 4+ weeks of
+# shadow decisions and a human's approval.
+adaptive:
+  vol_sizing:                     # 5A: each position carries similar risk
+    vol_days: 20                  # realized volatility window
+  atr_stops:                      # 5A: stops from volatility instead of a fixed %
+    atr_days: 14
+    multiple: 2.5                 # stop = multiple x ATR below the decision close
+    multiple_range: [1.5, 4.0]    # what an agent may choose from (it can't change the formula)
+    min_stop_pct: 0.03            # the stop is always between these
+    max_stop_pct: 0.15            # (the live param range is 3-8%: widening it would be a human decision)
+  allocator:                      # 5B: weekly capital split across an agent's strategies
+    lookback_days: 756            # past days used (3 years); only data before the decision
+    min_regime_days: 20           # fewer days in the current state: that strategy gets no tilt
+    shrink_days: 250              # tilt = days / (days + shrink_days) of the full tilt (thin evidence -> equal)
+    max_tilt: 1.0                 # full tilt: weight = equal x (1 + max_tilt x standardized score)
+    min_weight: 0.05
+    max_weight: 0.40
+    max_change: 0.15              # per strategy per rebalance (percentage points / 100)
+    confirm_days: 3               # an intra-week move only after the state changed and held this many days
+  risk_dial:                      # 5C: total exposure, can only cut risk
+    market_exposure: 0.65         # SPY below its 200-day average or volatility in the high bucket
+    drawdown_levels: [[0.08, 0.75], [0.12, 0.50]]   # agent down >= 8% from peak -> 75%, >= 12% -> 50%
+    recover_per_week: 0.10        # exposure comes back at most this much per week

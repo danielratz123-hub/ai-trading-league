@@ -807,6 +807,15 @@ def _review_dry_run(conn, args, jobs) -> None:
     cmd_learning_status(conn, args)
 
 
+def cmd_history_update(conn, args) -> None:
+    """The backtest lab's nightly job: append the day to data/history.db and
+    label it (python -m arena.lab has the other lab commands)."""
+    from .lab import cli as labcli
+    code = labcli.main_args(["history-update", "--arena-db", args.db])
+    if code:
+        raise LeagueError("history update had failures (see the log above)")
+
+
 COMMANDS = {
     "init-db": cmd_init_db,
     "update-calendar": cmd_update_calendar,
@@ -849,6 +858,7 @@ COMMANDS = {
     "learning-bootstrap": cmd_learning_bootstrap,
     "learning-status": cmd_learning_status,
     "review-dry-run": cmd_review_dry_run,
+    "history-update": cmd_history_update,
 }
 READ_ONLY = {"status", "tool", "check-agents", "init-db", "serve", "scheduler", "app", "hash-password",
              "backup", "backups", "restore-backup", "test-alert", "check-logins", "health", "learning-status", "staging"}
