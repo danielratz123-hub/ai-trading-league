@@ -214,6 +214,19 @@ def create_app() -> FastAPI:
     def pause(agent: str | None = Query(None)):
         return _set_paused(True, agent)
 
+    @app.post("/api/admin/halt", dependencies=[Depends(require_admin)])
+    def halt():
+        """Emergency stop: pause + no order reaches Alpaca. Undo: resume."""
+        from types import SimpleNamespace
+
+        from .. import main
+        conn = connect(db_path())
+        try:
+            main.cmd_halt(conn, SimpleNamespace())
+            return {"paused": True, "halted": league.is_halted(conn)}
+        finally:
+            conn.close()
+
     @app.post("/api/admin/resume", dependencies=[Depends(require_admin)])
     def resume(agent: str | None = Query(None)):
         return _set_paused(False, agent)

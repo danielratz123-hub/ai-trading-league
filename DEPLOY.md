@@ -481,6 +481,18 @@ stops decide and execute. The engine's own stop-loss / take-profit /
 forced-cover exits keep protecting open positions either way. Every flip is
 announced on Telegram.
 
+**Emergency stop.** A pause still lets the paper mirror copy those engine
+exits to Alpaca. To stop *everything*, including every Alpaca order:
+
+```bash
+docker compose exec engine python -m arena.main halt      # undo: resume
+```
+
+`halt` pauses the league, blocks every order to Alpaca (the mirror refuses
+to send anything), cancels all open orders in each paper account the mirror
+uses, and sends a Telegram alert. Also `POST /api/admin/halt` with the
+ADMIN_TOKEN. A global `resume` lifts it.
+
 ## Monitoring from outside
 
 A monitor on the server dies with the server, so two free outside services

@@ -25,6 +25,7 @@ League (times are US Eastern)
     trade-now        during market hours: fill the waiting week now at the latest price
     complete-now     during market hours: buy planned positions that had no price, fix negative cash
     pause / resume   the kill switch: stop / restart decide and execute (--agent X: one agent only)
+    halt             EMERGENCY STOP: pause + block every Alpaca order + cancel open ones (undo: resume)
     app              the easy way: dashboard + setup page, opens your browser (start.cmd runs this)
     serve            run the dashboard + read-only API on http://127.0.0.1:8000
     hash-password    make DASHBOARD_PASSWORD_HASH for the dashboard login (asks for the password)
@@ -249,7 +250,8 @@ def cmd_complete_now(conn, args) -> None:
 def cmd_status(conn, args) -> None:
     d = prices.latest_price_date(conn)
     agents = ledger.agent_ids(conn)
-    print(f"Prices up to: {d or '(none)'}" + ("   [LEAGUE PAUSED]" if league.is_paused(conn) else "")
+    print(f"Prices up to: {d or '(none)'}" + ("   [LEAGUE HALTED: no Alpaca orders]" if league.is_halted(conn)
+                                                else "   [LEAGUE PAUSED]" if league.is_paused(conn) else "")
           + (f"   [PAUSED: {', '.join(league.paused_agents(conn))}]" if league.paused_agents(conn) else ""))
     if not agents:
         print("No agents yet. Run `kickoff` to start the league.")
@@ -358,6 +360,20 @@ def cmd_pause(conn, args) -> None:
     league.set_paused(conn, True)
     print("League paused: decide and execute will refuse to run, no reviews or risk wake-ups. (daily keeps "
           "running so open positions stay protected.)")
+
+
+def cmd_halt(conn, args) -> None:
+    """Emergency stop: one command, everything stops (see league.set_halted)."""
+    from . import alerts, mirror
+    league.set_halted(conn)
+    print("HALTED: decide, execute, reviews and risk wake-ups refuse to run, and no order is sent to "
+          "Alpaca (not even mirrored stop-losses). Undo with: resume")
+    results = mirror.cancel_all_open_orders(ledger.agent_ids(conn)) if mirror.mode() != "off" else {}
+    for account, result in results.items():
+        print(f"Alpaca paper account ({account}): {result}")
+    alerts.send("EMERGENCY STOP: the league is HALTED. No agent trades and no order reaches Alpaca.\n"
+                + "\n".join(f"{a}: {r}" for a, r in results.items())
+                + "\nUndo: python -m arena.main resume", level="error")
 
 
 def cmd_resume(conn, args) -> None:
@@ -832,6 +848,7 @@ COMMANDS = {
     "complete-now": cmd_complete_now,
     "simulate": cmd_simulate,
     "pause": cmd_pause,
+    "halt": cmd_halt,
     "resume": cmd_resume,
     "app": cmd_app,
     "serve": cmd_serve,

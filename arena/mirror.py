@@ -78,6 +78,39 @@ def keys_for(agent_id: str) -> tuple[str, str]:
     raise MissingKeyError(f"Paper-account keys for {agent_id} aren't set (Setup, step 6).")
 
 
+def _halted(conn: sqlite3.Connection, d: str) -> bool:
+    """The emergency stop (league.set_halted): no order may reach Alpaca."""
+    row = conn.execute("SELECT value FROM league_state WHERE key='halted'").fetchone()
+    if row and row[0] == "1":
+        log_event(conn, "warning", "mirror", f"{d}: league HALTED; no orders sent to Alpaca")
+        return True
+    return False
+
+
+def cancel_all_open_orders(agent_ids: list[str]) -> dict[str, str]:
+    """Cancel every open order in each paper account the mirror uses.
+    Best effort per account: {account label: result}. Never raises."""
+    accounts: dict[str, tuple[str, str] | None] = {"main": None}
+    if mode() == "each":
+        for a in agent_ids:
+            try:
+                accounts[a] = keys_for(a)
+            except MissingKeyError:
+                pass
+    out, seen = {}, set()
+    for label, keys in accounts.items():
+        try:
+            broker = AlpacaPaperBroker(*keys) if keys else AlpacaPaperBroker()
+            acct = broker.account_id()
+            if acct in seen:
+                continue
+            seen.add(acct)
+            out[label] = f"{broker.cancel_open_orders()} open order(s) cancelled"
+        except Exception as e:  # noqa: BLE001 - report it, try the next account
+            out[label] = f"FAILED: {type(e).__name__}: {str(e)[:200]}"
+    return out
+
+
 class AlpacaPaperBroker:
     def __init__(self, key: str | None = None, secret: str | None = None):
         from alpaca.trading.client import TradingClient
@@ -109,6 +142,9 @@ class AlpacaPaperBroker:
             # Shown in Alpaca's order details: which agent(s) this order is for.
             client_order_id=f"arena-{label or 'mirror'}-{uuid.uuid4().hex[:10]}"))
         return str(order.id)
+
+    def cancel_open_orders(self) -> int:
+        return len(self.client.cancel_orders() or [])
 
 
 @dataclass
@@ -170,6 +206,8 @@ def plan(weights: dict[str, float], prices: dict[str, float], paper_equity: floa
 def sync(conn: sqlite3.Connection, d: str, broker: Broker | None = None, dry_run: bool = False,
          agent: str | None = None) -> list[MirrorLine]:
     """Mirror one agent (default: the leader) into a paper account at date d's prices."""
+    if _halted(conn, d):
+        return []
     who = agent or leader(conn)
     if who is None:
         log_event(conn, "info", "mirror", f"{d}: no single leader; paper account left unchanged")
@@ -238,7 +276,7 @@ def sync_all(conn: sqlite3.Connection, d: str, dry_run: bool = False,
              brokers: dict | None = None) -> dict[str, list[MirrorLine]]:
     """Run the mirror the way MIRROR_MODE says. Returns {agent: lines}."""
     m = mode()
-    if m == "off":
+    if m == "off" or _halted(conn, d):
         return {}
     if m == "combined":
         return sync_combined(conn, d, (brokers or {}).get("combined"), dry_run)
@@ -295,6 +333,8 @@ def sync_combined(conn: sqlite3.Connection, d: str, broker: Broker | None = None
     MIRROR_SIZING=exact, each agent's own league equity). Sends ONE net order
     per ticker (so the agents never trade against each other inside the
     account) and records each agent's part of it."""
+    if _halted(conn, d):
+        return {}
     agents = ledger.agent_ids(conn)
     if not agents:
         return {}

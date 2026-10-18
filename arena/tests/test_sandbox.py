@@ -90,7 +90,7 @@ def test_agent_cannot_fake_the_result(data):
 
 
 def test_refuses_when_a_limit_cannot_be_enforced(data):
-    for name in ("RLIMIT_CPU", "RLIMIT_AS", "RLIMIT_NPROC"):
+    for name in ("RLIMIT_CPU", "RLIMIT_AS", "RLIMIT_NPROC", "LANDLOCK"):
         r = run_code("analysis", "print('ran')", data, UNIVERSE, "2024-02-09", limits=FAST,
                      _simulate_limit_failure=name)
         assert not r.ok and r.refused and "refused" in r.error and "ran" not in r.stdout
@@ -119,3 +119,36 @@ def test_linux_kernel_limits_hold_without_the_audit_hook():
                          capture_output=True, text=True, timeout=30)
     assert out.returncode == 0, out.stderr
     assert "fork blocked" in out.stdout
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Landlock/seccomp are Linux-only")
+def test_linux_kernel_lockdown_holds_without_the_audit_hook(tmp_path):
+    """Even with no audit hook at all, after _kernel_lockdown the process
+    can't read /proc (other processes' secrets), files outside Python's
+    library, write files or open any socket - but library code still loads."""
+    import subprocess
+    secret = tmp_path / "secret.txt"
+    secret.write_text("x")
+    probe = "\n".join([
+        "import os, sys, _socket",
+        "sys.path.insert(0, sys.argv[1])",
+        "from child import _kernel_lockdown",
+        "_kernel_lockdown(sorted({sys.prefix, sys.base_prefix}))",
+        "def blocked(f):",
+        "    try: f()",
+        "    except OSError: return True",
+        "    return False",
+        "assert blocked(lambda: open('/proc/1/environ', 'rb').read())",
+        "assert blocked(lambda: open(sys.argv[2]).read())",
+        "assert blocked(lambda: open(sys.argv[2], 'w'))",
+        "assert blocked(lambda: _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM))",
+        "assert blocked(lambda: _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM))",
+        "assert blocked(lambda: _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM))",
+        "import json, decimal, statistics",   # lazy library imports still work
+        "print('locked down')",
+    ])
+    from arena.sandbox.runner import CHILD
+    out = subprocess.run([sys.executable, "-c", probe, str(CHILD.parent), str(secret)],
+                         capture_output=True, text=True, timeout=30, cwd=tmp_path)
+    assert out.returncode == 0, out.stderr
+    assert "locked down" in out.stdout

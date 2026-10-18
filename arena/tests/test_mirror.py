@@ -278,3 +278,49 @@ def test_exact_each_mode_and_dashboard(conn, monkeypatch):
     mirror.sync_all(conn, DAYS[2], brokers=brokers)
     assert dict(brokers["gpt"].orders)["XOM"] == pytest.approx(league_shares(conn, "gpt")["XOM"], rel=1e-6)
     assert queries.mirror_overview(conn)["sizing"] == "exact"
+
+
+@pytest.mark.parametrize("mode", ["combined", "leader", "each"])
+def test_halt_blocks_every_alpaca_order_until_resume(conn, monkeypatch, mode):
+    from arena import league
+    agents_with(conn, {"AAPL": 0.25}, {"XOM": 0.2})
+    conn.execute("INSERT INTO scores VALUES (1, 'gpt', 0.02, 1, 1000, 1020)")    # gpt leads
+    monkeypatch.setenv("MIRROR_MODE", mode)
+    brokers = {"combined": FakeBroker(100_000), "claude": FakeBroker(100_000), "gpt": FakeBroker(100_000)}
+    league.set_halted(conn)
+    assert league.is_halted(conn) and league.is_paused(conn)
+    assert mirror.sync_all(conn, DAYS[2], brokers=brokers) == {}
+    assert mirror.sync(conn, DAYS[2], brokers["gpt"], agent="gpt") == []
+    assert mirror.sync_combined(conn, DAYS[2], brokers["combined"]) == {}
+    assert not any(b.orders for b in brokers.values())
+    assert conn.execute("SELECT COUNT(*) FROM events_log WHERE message LIKE '%HALTED%'").fetchone()[0] >= 1
+
+    league.set_paused(conn, False)                    # global resume lifts the halt too
+    assert not league.is_halted(conn) and not league.is_paused(conn)
+    mirror.sync_all(conn, DAYS[2], brokers=brokers)
+    assert any(b.orders for b in brokers.values())
+
+
+def test_cancel_all_open_orders_reports_each_account_and_never_raises(monkeypatch):
+    class Fake:
+        def __init__(self, key=None, secret=None):
+            if key == "bad":
+                raise RuntimeError("unauthorized")
+            self.key = key or "main"
+
+        def account_id(self):
+            return self.key
+
+        def cancel_open_orders(self):
+            return 3
+
+    monkeypatch.setattr(mirror, "AlpacaPaperBroker", Fake)
+    monkeypatch.setenv("MIRROR_MODE", "each")
+    monkeypatch.setenv("ALPACA_MIRROR_GPT_KEY", "bad")
+    monkeypatch.setenv("ALPACA_MIRROR_GPT_SECRET", "x")
+    monkeypatch.setenv("ALPACA_MIRROR_CLAUDE_KEY", "main")      # same account as main: counted once
+    monkeypatch.setenv("ALPACA_MIRROR_CLAUDE_SECRET", "x")
+    out = mirror.cancel_all_open_orders(["claude", "gpt"])
+    assert out["main"] == "3 open order(s) cancelled"
+    assert "claude" not in out
+    assert out["gpt"].startswith("FAILED") and "unauthorized" in out["gpt"]

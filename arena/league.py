@@ -92,10 +92,30 @@ def set_paused(conn, paused: bool, agent_id: str | None = None) -> None:
     with transaction(conn):
         conn.execute("INSERT OR REPLACE INTO league_state(key, value) VALUES (?, ?)",
                      (_pause_key(agent_id), "1" if paused else "0"))
+        if agent_id is None and not paused:
+            conn.execute("INSERT OR REPLACE INTO league_state(key, value) VALUES ('halted', '0')")
         who = "league" if agent_id is None else agent_id
         log_event(conn, "info", "league", f"{who} {'paused' if paused else 'resumed'}")
     alerts.send(f"Kill switch: {'the whole league' if agent_id is None else agent_id} "
                 f"{'PAUSED' if paused else 'resumed'}.", level="warning" if paused else "good")
+
+
+# The emergency stop ('halted'): a global pause PLUS no order reaches Alpaca
+# at all - not even the mirror of the engine's own stop-losses, which a plain
+# pause still lets through. The league's internal ledger keeps protecting
+# positions; the paper account just stops following it. `resume` (global)
+# lifts both.
+
+def is_halted(conn) -> bool:
+    row = conn.execute("SELECT value FROM league_state WHERE key='halted'").fetchone()
+    return bool(row and row[0] == "1")
+
+
+def set_halted(conn) -> None:
+    with transaction(conn):
+        conn.execute("INSERT OR REPLACE INTO league_state(key, value) VALUES ('paused', '1')")
+        conn.execute("INSERT OR REPLACE INTO league_state(key, value) VALUES ('halted', '1')")
+        log_event(conn, "warning", "league", "HALTED: league paused and all Alpaca orders blocked")
 
 
 def _require_running(conn) -> None:
