@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 from .config import Config
 from .db import DB
-from .worker import Worker, log_text
+from .worker import Worker, log_text, plan_log
 
 PAGE = Path(__file__).parent / "page.html"
 
@@ -26,6 +26,26 @@ class NewTask(BaseModel):
     body: str = Field(default="", max_length=20000)
     done_when: str = Field(default="", max_length=4000)
     agent: str
+    reviewer: str = "claude"
+
+
+class NewPlan(BaseModel):
+    request: str = Field(min_length=10, max_length=20000)
+    manager: str
+    reviewer: str = "claude"
+
+
+class Choice(BaseModel):
+    builder: str | None = None
+    reviewer: str | None = None
+
+
+class Approve(BaseModel):
+    tasks: list[Choice] = Field(default_factory=list, max_length=20)
+
+
+class Notes(BaseModel):
+    notes: str = Field(default="", max_length=20000)
 
 
 class Resume(BaseModel):
@@ -38,12 +58,18 @@ def same_site(x_hub: str | None = Header(default=None)) -> None:
 
 
 def public(t: dict, repo: str) -> dict:
-    out = {k: t[k] for k in ("id", "title", "body", "done_when", "agent", "status", "issue", "branch",
-                             "pr", "round", "note", "created_at", "updated_at")}
+    out = {k: t.get(k) for k in ("id", "title", "body", "done_when", "agent", "reviewer", "status",
+                                 "issue", "branch", "pr", "round", "note", "plan_id", "plan_order",
+                                 "review_verdict", "created_at", "updated_at")}
     base = f"https://github.com/{repo}"
     out["issue_url"] = f"{base}/issues/{t['issue']}" if t["issue"] else None
     out["pr_url"] = f"{base}/pull/{t['pr']}" if t["pr"] else None
     return out
+
+
+def public_plan(p: dict) -> dict:
+    return {k: p.get(k) for k in ("id", "request", "manager", "reviewer", "status", "summary", "tasks",
+                                  "feedback", "note", "created_at", "updated_at")}
 
 
 def create_app(cfg: Config, db: DB, worker: Worker | None) -> FastAPI:
@@ -85,6 +111,7 @@ def create_app(cfg: Config, db: DB, worker: Worker | None) -> FastAPI:
             "agents": [{"key": k, "label": v["label"], "test": agent_tests.get(k)}
                        for k, v in cfg.agents.items()],
             "tasks": [public(t, cfg.repo) for t in db.list(50)],
+            "plans": [public_plan(p) for p in db.plans(20)],
         }
 
     @app.get("/hub/api/tasks/{task_id}")
@@ -96,12 +123,63 @@ def create_app(cfg: Config, db: DB, worker: Worker | None) -> FastAPI:
     @app.post("/hub/api/tasks", dependencies=[Depends(same_site)])
     def create(body: NewTask):
         w = need_worker()
-        if body.agent not in cfg.agents:
+        if body.agent not in cfg.agents or body.reviewer not in cfg.agents:
             raise HTTPException(400, "Unknown agent.")
-        tid = db.create_task(body.title.strip(), body.body.strip(), body.done_when.strip(), body.agent)
-        db.event(tid, "created", f"Task for {cfg.agents[body.agent]['label']}")
+        tid = db.create_task(body.title.strip(), body.body.strip(), body.done_when.strip(), body.agent,
+                             body.reviewer)
+        db.event(tid, "created", f"{cfg.agents[body.agent]['label']} builds, "
+                                 f"{cfg.agents[body.reviewer]['label']} reviews")
         w.wake.set()
         return {"id": tid}
+
+    @app.post("/hub/api/plans", dependencies=[Depends(same_site)])
+    def create_plan(body: NewPlan):
+        w = need_worker()
+        if body.manager not in cfg.agents or body.reviewer not in cfg.agents:
+            raise HTTPException(400, "Unknown agent.")
+        pid = db.create_plan(body.request.strip(), body.manager, body.reviewer)
+        w.wake.set()
+        return {"id": pid}
+
+    def plan_or_404(plan_id: int) -> dict:
+        p = db.plan(plan_id)
+        if not p:
+            raise HTTPException(404, "No such plan.")
+        return p
+
+    @app.get("/hub/api/plans/{plan_id}")
+    def plan(plan_id: int):
+        p = plan_or_404(plan_id)
+        return {"plan": public_plan(p), "log": plan_log(cfg, plan_id),
+                "tasks": [public(t, cfg.repo) for t in db.plan_tasks(plan_id)]}
+
+    @app.post("/hub/api/plans/{plan_id}/approve", dependencies=[Depends(same_site)])
+    def approve(plan_id: int, body: Approve):
+        plan_or_404(plan_id)
+        err = need_worker().approve_plan(plan_id, [c.model_dump() for c in body.tasks])
+        if err:
+            raise HTTPException(409, err)
+        return {"ok": True}
+
+    @app.post("/hub/api/plans/{plan_id}/revise", dependencies=[Depends(same_site)])
+    def revise(plan_id: int, body: Notes):
+        plan_or_404(plan_id)
+        err = need_worker().revise_plan(plan_id, body.notes)
+        if err:
+            raise HTTPException(409, err)
+        return {"ok": True}
+
+    @app.post("/hub/api/plans/{plan_id}/reject", dependencies=[Depends(same_site)])
+    def reject(plan_id: int):
+        plan_or_404(plan_id)
+        need_worker().reject_plan(plan_id)
+        return {"ok": True}
+
+    @app.post("/hub/api/plans/{plan_id}/cancel", dependencies=[Depends(same_site)])
+    def cancel_plan(plan_id: int):
+        plan_or_404(plan_id)
+        need_worker().cancel_plan(plan_id)
+        return {"ok": True}
 
     @app.post("/hub/api/tasks/{task_id}/cancel", dependencies=[Depends(same_site)])
     def cancel(task_id: int):

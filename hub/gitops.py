@@ -103,5 +103,10 @@ class Repo:
     def push(self, branch: str) -> None:
         git(self.path, "push", "--quiet", self.url, f"HEAD:refs/heads/{branch}", token=self.token or None)
 
+    def reset_to(self, sha: str) -> None:
+        """Throw away anything a reviewer or manager changed."""
+        git(self.path, "reset", "-q", "--hard", sha)
+        git(self.path, "clean", "-qfd")
+
     def remove(self) -> None:
         shutil.rmtree(self.path, ignore_errors=True)

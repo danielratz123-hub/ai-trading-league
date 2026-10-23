@@ -17,6 +17,7 @@ starting. LAB.md and LEARNING.md explain the backtest lab and the learning layer
 | Codex | Builder: implements issues labeled `codex`, opens a PR |
 | Gemini | Builder: implements issues labeled `gemini`, opens a PR |
 | Claude | Reviewer of every PR; builder for issues labeled `claude` |
+| Agent Hub | For tasks started there (HUB.md), Joe picks the builder, the reviewer and, for plans, a manager agent; any of the three can take any role |
 | Joe | Writes issues, reads the PR conversation, merges |
 
 ## Hard rules (never break these)

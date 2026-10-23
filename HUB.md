@@ -1,28 +1,48 @@
 # Agent Hub
 
-One page to give coding tasks to **Claude, Codex or Gemini**, running on **your
-subscriptions**. You write the task on your phone; the hub does the rest and tells
-you when a PR is ready to merge.
+One page to give coding work to **Claude, Codex and Gemini**, running on **your
+subscriptions**. You choose who builds, who reviews and, for bigger requests, who
+manages. You write it on your phone; the hub does the rest and tells you when a
+PR is ready to merge.
 
 **Where:** https://databasedstrategy.com/hub (same login as the dashboard)
 
+## Two ways to start
+
+**One task:** pick the **builder** and the **reviewer**, write the task, press **Start**.
+
+**Plan with a manager:** write what you want in a few sentences, pick the
+**manager** and the **reviewer**. The manager reads the code and proposes a
+plan of 1–6 small tasks, each with the builder it thinks fits (and why). You
+can change any task's builder or reviewer, then:
+- **Approve & start** → the tasks run one after another; each starts when the
+  one before it is merged (so later steps build on earlier ones)
+- **Ask for changes** → write what to change; the manager makes a new plan
+- **Reject**
+
+Nothing is built before you approve a plan. Any agent can take any role. If
+the builder and the reviewer are the same agent, the page warns you: a second
+opinion from another agent catches more.
+
 ## What happens to a task
 
-1. You fill in the task, pick the agent, press **Start**.
-2. The hub opens a GitHub issue, makes a fresh copy of the repo and a branch
-   `hub/<agent>-<issue>-<name>`, and runs that agent's CLI on the task.
-3. It runs the same checks as CI. If they fail, the agent gets the errors and
+1. The hub opens a GitHub issue, makes a fresh copy of the repo and a branch
+   `hub/<agent>-<issue>-<name>`, and runs the builder's CLI on the task.
+2. It runs the same checks as CI. If they fail, the builder gets the errors and
    two more tries.
-4. It pushes the branch and opens a PR. **Claude's automatic review** and **CI** run.
-5. Review says 🔧 *Needs fixes* → the hub sends the comments back to the same
-   agent, which fixes and pushes. Up to 4 rounds.
-6. Review says ✅ and CI is green → **Ready to merge**. You get a Telegram
-   message (if set up), open the page, press **Merge & deploy**.
-7. Anything off (⛔ from the review, an agent error, too many rounds) →
-   **Needs you**. Read the note, then **Continue** (optionally with instructions
-   for the agent) or **Cancel**.
+3. It pushes the branch and opens a PR. **CI** runs on GitHub, and the hub runs
+   **the reviewer you picked** on the PR. The review is posted on the PR with a
+   verdict: ✅ ready / 🔧 needs fixes / ⛔ Joe must look. (The automatic GitHub
+   Claude review skips hub PRs, so there's one verdict, from your reviewer.)
+4. 🔧, or CI red → the hub sends the review to the builder, which fixes and
+   pushes; the reviewer checks again. Up to 4 rounds.
+5. ✅ and CI green → **Ready to merge**. You get a Telegram message (if set
+   up), open the page, press **Merge & deploy**.
+6. Anything off (⛔, an agent error, too many rounds) → **Needs you**. Read the
+   note, then **Continue** (optionally with instructions for the builder) or
+   **Cancel**. If you push to the branch yourself, the reviewer looks again.
 
-The hub **never merges by itself**. One task runs at a time.
+The hub **never merges by itself**. One agent runs at a time.
 
 ## Safety
 
@@ -108,6 +128,7 @@ agent gets a green dot (hover/tap shows the version). A red dot shows why
 - **Change an agent's command** (e.g. a model flag): set `HUB_CMD_GEMINI` (or
   `_CLAUDE`, `_CODEX`) in `hub.env` to a JSON list, with `"{prompt}"` where the
   task goes, then `docker compose up -d hub`.
+- Your last choices of builder, reviewer and manager are remembered in your browser.
 - **Limits:** `HUB_MAX_ROUNDS` (4), `HUB_AGENT_TIMEOUT` (45 min),
   `HUB_REVIEW_TIMEOUT` (40 min) in `hub.env`.
 

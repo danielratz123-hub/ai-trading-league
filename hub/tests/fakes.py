@@ -69,13 +69,9 @@ class FakeGitHub:
     def workflow_runs(self, sha):
         return list(self.runs)
 
-    # helpers for tests
-    def review(self, body: str, at: float, ci: str = "success", review: str = "success"):
-        self.runs = [{"name": "CI", "status": "completed", "conclusion": ci, "event": "pull_request"},
-                     {"name": "Claude review", "status": "completed", "conclusion": review,
-                      "event": "pull_request"}]
-        self.issue_comment_list.append({"user": {"login": "claude[bot]"}, "created_at": iso(at),
-                                        "body": body})
+    # helper for tests
+    def ci(self, conclusion: str = "success"):
+        self.runs = [{"name": "CI", "status": "completed", "conclusion": conclusion, "event": "pull_request"}]
 
 
 class FakeRepo:
@@ -83,7 +79,7 @@ class FakeRepo:
     instances: list["FakeRepo"] = []
 
     def __init__(self, task: dict, tmp: Path):
-        self.path = tmp / f"task-{task['id']}"
+        self.path = tmp / (f"plan-{task['plan']}" if "plan" in task else f"task-{task['id']}")
         self.path.mkdir(parents=True, exist_ok=True)
         self.calls: list[tuple] = []
         self.files = ["arena/x.py"]
@@ -110,27 +106,57 @@ class FakeRepo:
         return getattr(self, "diff", "+ some change")
 
     def head(self):
-        return f"sha{self.sha}"
+        return getattr(self, "head_override", None) or f"sha{self.sha}"
 
     def push(self, branch):
         self.sha += 1
         self.calls.append(("push", branch))
 
+    def reset_to(self, sha):
+        self.calls.append(("reset", sha))
+
     def remove(self):
         self.calls.append(("remove",))
 
 
+PLAN_OUTPUT = """Looked at arena/league.py.
+BEGIN_PLAN
+{"summary": "Two steps.", "tasks": [
+ {"title": "SPY player", "details": "Add it in arena/league.py", "done_when": "tests", "builder": "codex", "why": "fast"},
+ {"title": "Show SPY on the scoreboard", "details": "arena/web", "done_when": "visible", "builder": "nobody"}]}
+END_PLAN
+"""
+
+
 class Agents:
-    """Fake run_agent / run_checks with scripted results."""
+    """Fake run_agent / run_checks with scripted results. Builders, reviewers
+    and managers are told apart by their prompt; each run is also written to
+    log_path, like the real runner does."""
 
     def __init__(self):
         self.prompts: list[str] = []
+        self.calls: list[tuple[str, str]] = []           # (role, agent command[0])
         self.agent_results: list[RunResult] = []
         self.check_results: list[RunResult] = []
+        self.reviews: list[str] = []
+        self.plan_output = PLAN_OUTPUT
 
     def run_agent(self, agent_cfg, prompt, cwd, log_path, timeout, should_stop):
         self.prompts.append(prompt)
-        return self.agent_results.pop(0) if self.agent_results else RunResult(True, 0, "Did it. Tests pass.")
+        role = "review" if "the REVIEWER" in prompt else "manager" if "the MANAGER" in prompt else "build"
+        self.calls.append((role, agent_cfg["cmd"][0]))
+        if role == "review":
+            out = self.reviews.pop(0) if self.reviews else "Looks fine.\n**Verdict:** ✅ Ready to merge\n**Must fix:** none"
+            result = RunResult(True, 0, out)
+        elif role == "manager":
+            out = self.plan_output
+            result = RunResult(True, 0, out)
+        else:
+            result = self.agent_results.pop(0) if self.agent_results else RunResult(True, 0, "Did it. Tests pass.")
+            out = result.tail
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(log_path).write_text(f"$ cmd prompt...\n{out}")
+        return result
 
     def run_checks(self, cwd, log_path, timeout, should_stop):
         return self.check_results.pop(0) if self.check_results else RunResult(True, 0, "416 passed")

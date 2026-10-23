@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import sys
@@ -13,7 +14,7 @@ from hub.gitops import Repo, branch_name, slug
 from hub.web import create_app
 from hub.worker import Worker
 
-from .fakes import FakeGitHub, iso, make_cfg
+from .fakes import FakeGitHub, make_cfg
 
 
 # ---------------------------------------------------------------- review
@@ -29,23 +30,37 @@ def test_verdict(text, want):
     assert review.verdict(text) == want
 
 
-def test_latest_summary_only_claude_after_push():
-    t0 = 1_800_000_000.0
-    comments = [
-        {"user": {"login": "claude[bot]"}, "created_at": iso(t0 - 600), "body": "Verdict: 🔧 old"},
-        {"user": {"login": "someone"}, "created_at": iso(t0 + 60), "body": "Verdict: ✅ fake"},
-        {"user": {"login": "claude[bot]"}, "created_at": iso(t0 + 90), "body": "Verdict: ✅ new"},
-    ]
-    assert review.latest_summary(comments, t0)["body"] == "Verdict: ✅ new"
-    assert review.latest_summary(comments[:2], t0) is None
+def test_review_section_takes_the_last_verdict():
+    out = ("prompt echo: **Verdict:** ✅ Ready to merge  /  🔧 Needs fixes  /  ⛔ Stop\n"
+           "...thinking...\n**Verdict:** 🔧 Needs fixes\n**Must fix:** 1. x")
+    sec = review.review_section(out)
+    assert sec.startswith("**Verdict:** 🔧") and review.verdict(sec) == review.FIX
+    assert review.review_section("nothing here") == ""
 
 
-def test_checks_state_prefers_pull_request_runs():
+def test_ci_state_prefers_pull_request_runs():
     runs = [{"name": "CI", "status": "completed", "conclusion": "failure", "event": "push"},
             {"name": "CI", "status": "completed", "conclusion": "success", "event": "pull_request"},
-            {"name": "Claude review", "status": "in_progress", "conclusion": None, "event": "pull_request"}]
-    s = review.checks_state(runs)
-    assert s.ci == "success" and s.review is None and not s.done
+            {"name": "Claude", "status": "completed", "conclusion": "skipped", "event": "pull_request"}]
+    assert review.ci_state(runs) == "success"
+    assert review.ci_state([{"name": "CI", "status": "in_progress", "conclusion": None,
+                             "event": "pull_request"}]) is None
+    assert review.ci_state([]) is None
+
+
+def test_parse_plan():
+    agents_cfg = {"claude": {}, "codex": {}, "gemini": {}}
+    out = 'echo BEGIN_PLAN {"x": 1} END_PLAN\nBEGIN_PLAN\n```json\n{"summary": "S", "tasks": [' \
+          '{"title": "A", "builder": "Codex"}, {"title": "", "builder": "codex"}, {"title": "B", "builder": "x"}]}' \
+          '\n```\nEND_PLAN'
+    summary, tasks = review.parse_plan(out, agents_cfg, "gemini")
+    assert summary == "S" and [(t["title"], t["builder"]) for t in tasks] == [("A", "codex"), ("B", "gemini")]
+    with pytest.raises(review.PlanError):
+        review.parse_plan("no plan", agents_cfg, "claude")
+    with pytest.raises(review.PlanError):
+        review.parse_plan("BEGIN_PLAN {bad json END_PLAN", agents_cfg, "claude")
+    many = "BEGIN_PLAN " + json.dumps({"tasks": [{"title": f"t{i}"} for i in range(9)]}) + " END_PLAN"
+    assert len(review.parse_plan(many, agents_cfg, "claude")[1]) == review.MAX_PLAN_TASKS
 
 
 # ---------------------------------------------------------------- agents
@@ -186,3 +201,25 @@ def test_claude_login_goes_only_to_claude(monkeypatch):
     claude_env = agents.child_env(extra=tuple(cfg.agents["claude"]["env_keys"]))
     assert claude_env["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-x"
     assert "env_keys" not in cfg.agents["codex"]
+
+
+def test_task_with_reviewer_and_plan_flow(tmp_path):
+    c, db = client(tmp_path)
+    h = {"X-Hub": "1"}
+    r = c.post("/hub/api/tasks", json={"title": "Do a thing", "agent": "codex", "reviewer": "gemini"}, headers=h)
+    assert db.get(r.json()["id"])["reviewer"] == "gemini"
+    assert c.post("/hub/api/tasks", json={"title": "Do a thing", "agent": "codex", "reviewer": "x"},
+                  headers=h).status_code == 400
+    assert c.post("/hub/api/plans", json={"request": "short", "manager": "claude"}, headers=h).status_code == 422
+    r = c.post("/hub/api/plans", json={"request": "Add an SPY benchmark player", "manager": "gemini",
+                                        "reviewer": "claude"}, headers=h)
+    pid = r.json()["id"]
+    assert c.get("/hub/api/state").json()["plans"][0]["status"] == "planning"
+    assert c.post(f"/hub/api/plans/{pid}/approve", json={}, headers=h).status_code == 409
+    db.update_plan(pid, status="proposed", tasks_json=json.dumps(
+        [{"title": "A", "details": "", "done_when": "", "builder": "codex", "reviewer": "claude"}]))
+    assert c.post(f"/hub/api/plans/{pid}/approve", json={"tasks": [{"reviewer": "gemini"}]},
+                  headers=h).status_code == 200
+    d = c.get(f"/hub/api/plans/{pid}").json()
+    assert d["plan"]["status"] == "approved" and d["tasks"][0]["reviewer"] == "gemini"
+    assert c.post(f"/hub/api/plans/{pid}/cancel", headers=h).status_code == 200

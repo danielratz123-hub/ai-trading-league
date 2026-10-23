@@ -1,21 +1,17 @@
-"""Reading Claude's automatic review (.github/workflows/claude-review.yml)
-and the CI result for the PR's latest commit."""
+"""Reading a reviewer's verdict, a manager's plan, and the CI result."""
 from __future__ import annotations
 
+import json
 import re
-from dataclasses import dataclass
 
-from .github import parse_time
-
-REVIEW_WORKFLOW = "Claude review"
 CI_WORKFLOW = "CI"
-REVIEWER_LOGINS = ("claude[bot]", "claude")
 
 OK, FIX, STOP, UNKNOWN = "ok", "fix", "stop", "unknown"
+MAX_PLAN_TASKS = 6
 
 
 def verdict(text: str) -> str:
-    """The verdict line of a review summary -> ok / fix / stop / unknown."""
+    """The verdict line of a review -> ok / fix / stop / unknown."""
     m = re.search(r"verdict[:*\s]*([^\n]*)", text, re.IGNORECASE)
     if not m:
         return UNKNOWN
@@ -29,42 +25,57 @@ def verdict(text: str) -> str:
     return UNKNOWN
 
 
-def latest_summary(comments: list[dict], since: float) -> dict | None:
-    """Newest review summary by Claude posted after `since` (the hub's push)."""
-    found = None
-    for c in comments:
-        login = (c.get("user") or {}).get("login", "")
-        if login in REVIEWER_LOGINS and parse_time(c.get("created_at")) >= since - 5 \
-                and re.search(r"verdict", c.get("body", ""), re.IGNORECASE):
-            found = c
-    return found
+def review_section(output: str) -> str:
+    """The review at the end of a reviewer's output: from its last
+    "Verdict" line to the end. (Some CLIs echo the prompt first, which also
+    mentions the format, so the LAST one is the answer.)"""
+    hits = list(re.finditer(r"(\*\*)?verdict(\*\*)?\s*:", output, re.IGNORECASE))
+    if not hits:
+        return ""
+    return output[hits[-1].start():].strip()[:8000]
 
 
-def inline_since(comments: list[dict], since: float) -> list[str]:
-    out = []
-    for c in comments:
-        login = (c.get("user") or {}).get("login", "")
-        if login in REVIEWER_LOGINS and parse_time(c.get("created_at")) >= since - 5:
-            line = c.get("line") or c.get("original_line") or "?"
-            out.append(f"- {c.get('path', '?')}:{line}: {c.get('body', '').strip()}")
-    return out
+def ci_state(runs: list[dict]) -> str | None:
+    """Conclusion of the CI workflow for a commit ("success", "failure", ...),
+    or None while it hasn't finished (or started)."""
+    matches = [r for r in runs if r["name"] == CI_WORKFLOW]
+    matches.sort(key=lambda r: r.get("event") != "pull_request")   # PR run first
+    if not matches or matches[0]["status"] != "completed":
+        return None
+    return matches[0]["conclusion"] or "unknown"
 
 
-@dataclass
-class ChecksState:
-    done: bool            # both CI and the review run have finished
-    ci: str | None        # conclusion of CI ("success", "failure", ...) or None
-    review: str | None    # conclusion of the review run, or None
+class PlanError(ValueError):
+    pass
 
 
-def checks_state(runs: list[dict]) -> ChecksState:
-    def pick(name: str) -> dict | None:
-        # PR runs first: the push run of CI has the same name.
-        matches = [r for r in runs if r["name"] == name]
-        matches.sort(key=lambda r: r.get("event") != "pull_request")
-        return matches[0] if matches else None
-
-    ci, rv = pick(CI_WORKFLOW), pick(REVIEW_WORKFLOW)
-    ci_c = ci["conclusion"] if ci and ci["status"] == "completed" else None
-    rv_c = rv["conclusion"] if rv and rv["status"] == "completed" else None
-    return ChecksState(done=ci_c is not None and rv_c is not None, ci=ci_c, review=rv_c)
+def parse_plan(output: str, agents: dict, fallback_builder: str) -> tuple[str, list[dict]]:
+    """The manager's plan, between the LAST BEGIN_PLAN and END_PLAN lines.
+    Returns (summary, tasks). Unknown builders fall back to the manager."""
+    start = output.rfind("BEGIN_PLAN")
+    end = output.find("END_PLAN", start)
+    if start < 0 or end < 0:
+        raise PlanError("The manager didn't write a plan (BEGIN_PLAN ... END_PLAN).")
+    raw = output[start + len("BEGIN_PLAN"):end].strip().strip("`").removeprefix("json").strip()
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise PlanError(f"The plan isn't valid JSON ({e.msg}).") from e
+    tasks_in = data.get("tasks") if isinstance(data, dict) else None
+    if not isinstance(tasks_in, list) or not tasks_in:
+        raise PlanError("The plan has no tasks.")
+    tasks = []
+    for item in tasks_in[:MAX_PLAN_TASKS]:
+        if not isinstance(item, dict) or not str(item.get("title", "")).strip():
+            continue
+        builder = str(item.get("builder", "")).strip().lower()
+        tasks.append({
+            "title": str(item["title"]).strip()[:200],
+            "details": str(item.get("details", "")).strip()[:8000],
+            "done_when": str(item.get("done_when", "")).strip()[:2000],
+            "builder": builder if builder in agents else fallback_builder,
+            "why": str(item.get("why", "")).strip()[:500],
+        })
+    if not tasks:
+        raise PlanError("The plan has no usable tasks.")
+    return str(data.get("summary", "")).strip()[:3000], tasks
