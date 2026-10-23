@@ -144,7 +144,8 @@ class Agents:
     def run_agent(self, agent_cfg, prompt, cwd, log_path, timeout, should_stop):
         self.prompts.append(prompt)
         role = "review" if "the REVIEWER" in prompt else "manager" if "the MANAGER" in prompt else "build"
-        self.calls.append((role, agent_cfg["cmd"][0]))
+        cli = agent_cfg["cmd"][0]
+        self.calls.append((role, {"agy": "gemini"}.get(cli, cli)))     # agy = Gemini's CLI
         if role == "review":
             out = self.reviews.pop(0) if self.reviews else "Looks fine.\n**Verdict:** ✅ Ready to merge\n**Must fix:** none"
             result = RunResult(True, 0, out)

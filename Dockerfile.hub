@@ -7,16 +7,16 @@ FROM python:3.14.3-slim-bookworm
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
 
-# Same CLI versions as the league image, plus Gemini. Change them on purpose.
+# Same CLI versions as the league image. Change them on purpose. Gemini runs
+# through Google's Antigravity CLI (agy), installed below for the hub user:
+# Gemini CLI no longer signs in with a personal Google AI subscription.
 ARG CLAUDE_CODE_VERSION=2.1.293
 ARG CODEX_VERSION=0.161.0
-ARG GEMINI_CLI_VERSION=0.65.0
 RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && apt-get update \
- && apt-get install -y --no-install-recommends git ca-certificates tzdata ripgrep \
+ && apt-get install -y --no-install-recommends git ca-certificates tzdata ripgrep curl \
  && rm -rf /var/lib/apt/lists/* \
  && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "@openai/codex@${CODEX_VERSION}" \
-      "@google/gemini-cli@${GEMINI_CLI_VERSION}" \
  && npm cache clean --force
 
 # The league's requirements, so the CI checks run fast inside task copies
@@ -28,9 +28,14 @@ COPY hub ./hub
 
 ARG APP_UID=1000
 RUN useradd --create-home --uid ${APP_UID} hub \
- && mkdir -p /hub/data /home/hub/.claude /home/hub/.codex /home/hub/.gemini \
+ && mkdir -p /hub/data /home/hub/.claude /home/hub/.codex /home/hub/.gemini /home/hub/.config \
  && chown -R hub:hub /hub /home/hub
 USER hub
+# Antigravity CLI into ~/.local/bin. Google's installer, latest version. If it
+# fails (network, site down) the image still builds, so the league's deploy
+# never breaks; the hub's "Test agents" then shows Gemini as not installed.
+RUN (curl -fsSL https://antigravity.google/cli/install.sh | bash) \
+    || echo "WARNING: Antigravity CLI install failed; Gemini tasks won't run"
 ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
     TZ=Asia/Jerusalem \

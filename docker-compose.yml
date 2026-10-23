@@ -136,7 +136,8 @@ services:
       - hub-data:/hub/data
       - hub-claude:/home/hub/.claude
       - hub-codex:/home/hub/.codex
-      - hub-gemini:/home/hub/.gemini
+      - hub-gemini:/home/hub/.gemini        # Antigravity CLI (Gemini) sign-in
+      - hub-config:/home/hub/.config
     networks: [web, default]
     logging:
       driver: json-file
@@ -162,3 +163,4 @@ volumes:
   hub-claude:
   hub-codex:
   hub-gemini:
+  hub-config:

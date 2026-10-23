@@ -223,3 +223,12 @@ def test_task_with_reviewer_and_plan_flow(tmp_path):
     d = c.get(f"/hub/api/plans/{pid}").json()
     assert d["plan"]["status"] == "approved" and d["tasks"][0]["reviewer"] == "gemini"
     assert c.post(f"/hub/api/plans/{pid}/cancel", headers=h).status_code == 200
+
+
+def test_gemini_runs_through_antigravity(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "AIzaSy-test-key-123")
+    cfg = load()
+    assert cfg.agents["gemini"]["cmd"][0] == "agy"
+    assert agents.agent_command(cfg.agents["gemini"], "hi") == ["agy", "-p", "hi", "--dangerously-skip-permissions"]
+    assert "GEMINI_API_KEY" not in agents.child_env(extra=tuple(cfg.agents["claude"]["env_keys"]))
+    assert "AIzaSy-test-key-123" in cfg.secrets
