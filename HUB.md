@@ -109,11 +109,17 @@ From now on every automatic deploy also updates the hub.
 # Codex: prints a link + code; open it on your phone, sign in with ChatGPT
 docker compose exec hub codex login --device-auth
 
-# Gemini: choose "Login with Google"; it prints a link, open it, sign in with
-# the Google account that has your Gemini subscription, paste the code back.
-# When it says you're signed in, type /quit.
-docker compose exec -e NO_BROWSER=true hub gemini
+# Gemini (Antigravity CLI): prints a Google sign-in link; open it on your phone,
+# sign in with the account that has your Gemini subscription, paste the code
+# back if it asks. When it says you're signed in, type /quit.
+docker compose exec -it hub agy
 ```
+
+Gemini runs through Google's **Antigravity CLI** (`agy`): the old Gemini CLI no
+longer signs in with a personal Google AI subscription. If `agy` can't keep the
+sign-in inside the container (it may complain about a "keyring"), use a free key
+from Google AI Studio instead: put `GEMINI_API_KEY=...` in `hub.env` and run
+`docker compose up -d hub`.
 
 **6. Check** — open `/hub`, press **Test agents**. After a few minutes each
 agent gets a green dot (hover/tap shows the version). A red dot shows why

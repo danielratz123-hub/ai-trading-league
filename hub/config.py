@@ -39,8 +39,12 @@ DEFAULT_AGENTS: dict[str, dict] = {
     },
     "gemini": {
         "label": "Gemini",
-        "cmd": ["gemini", "--yolo", "-p", "{prompt}"],
-        "version": ["gemini", "--version"],
+        # Google's Antigravity CLI: signs in with your Gemini subscription
+        # (docker compose exec -it hub agy). GEMINI_API_KEY is passed too, for
+        # anyone using a key instead (see HUB.md).
+        "cmd": ["agy", "-p", "{prompt}", "--dangerously-skip-permissions"],
+        "version": ["agy", "--version"],
+        "env_keys": ["GEMINI_API_KEY"],
     },
 }
 
@@ -89,7 +93,8 @@ class Config:
     @property
     def secrets(self) -> list[str]:
         """Values that must never appear in a pushed change."""
-        values = [self.token, self.telegram_token, os.getenv("CLAUDE_CODE_OAUTH_TOKEN", "")]
+        values = [self.token, self.telegram_token, os.getenv("CLAUDE_CODE_OAUTH_TOKEN", ""),
+                  os.getenv("GEMINI_API_KEY", "")]
         return [v for v in values if len(v) >= 12]
 
     @property
