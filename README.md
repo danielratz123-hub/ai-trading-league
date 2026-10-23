@@ -3,6 +3,11 @@
 Two AI agents trade virtual money on real US stock prices. The engine enforces the rules,
 the ledger moves the money, and a dashboard (phase 4) shows who's winning.
 
+## Working on the code
+
+Coding agents (Codex, Gemini, Claude) follow **[AGENTS.md](AGENTS.md)**. New work starts as a GitHub issue
+from the "Agent task" template; every PR gets an automatic Claude review.
+
 ## Quick start (the easy way)
 
 1. Double-click **`start.cmd`** in this folder. The first time, it installs everything (a few minutes).
