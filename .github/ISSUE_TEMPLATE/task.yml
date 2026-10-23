@@ -1,0 +1,35 @@
+name: Agent task
+description: A task for one coding agent (Codex, Gemini or Claude)
+title: "[task] "
+body:
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Who builds it
+      options: [codex, gemini, claude]
+    validations:
+      required: true
+  - type: input
+    id: roadmap
+    attributes:
+      label: Roadmap item (if any)
+      placeholder: "e.g. 1.1 Benchmark competitors"
+  - type: textarea
+    id: goal
+    attributes:
+      label: What to build
+      description: What it should do, in plain words.
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: How we know it works.
+      placeholder: "e.g. the scoreboard shows an SPY player scored like the agents, with tests"
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes / files to look at
