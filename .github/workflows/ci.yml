@@ -2,6 +2,10 @@
 # the VPS (scripts/deploy.sh: waits for a quiet moment, rebuilds, health
 # check, automatic rollback). Setup: DEPLOY.md "GitHub and automatic deploys".
 #
+# Deploy runs ONLY on a push to main: never on a pull request, another branch
+# or a manual run. A branch can edit this file, so the server enforces it too:
+# deploy.sh refuses any commit that is not on origin/main.
+#
 # Secrets (repo Settings -> Secrets and variables -> Actions):
 #   VPS_HOST         the server's IP
 #   VPS_USER         daniel
@@ -12,7 +16,6 @@ name: CI
 on:
   push:
   pull_request:
-  workflow_dispatch:        # "Run workflow" button: re-run a deploy that waited too long
 
 concurrency:
   group: deploy-${{ github.ref }}
@@ -36,7 +39,7 @@ jobs:
 
   deploy:
     needs: test
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:

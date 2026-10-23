@@ -1,6 +1,34 @@
+# Secrets: never commit these (.env.example is the template and stays tracked)
 .env
-.venv/
+.env.*
+!.env.example
+*.env
+credentials*.json
+client_secret*.json
+service-account*.json
+token*.json
+rclone.conf
+*.pem
+*.key
+id_*
+!id_*.py
+
+# Databases (live data lives in data/ on the server)
 data/
+backups/
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Local notes and reports, not code
+status-pc.txt
+status-*.txt
+*.docx
+
+.venv/
 __pycache__/
 *.pyc
 .pytest_cache/

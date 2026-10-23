@@ -24,6 +24,12 @@ case "$TARGET" in
 esac
 MAX_WAIT=2400          # seconds to wait for a quiet moment
 
+# Only commits that are on main. Any branch can edit the CI workflow, so this
+# check lives here, on the server, where a branch can't change it.
+git fetch --quiet origin main
+git merge-base --is-ancestor "$TARGET" origin/main 2>/dev/null || {
+  echo "Not on origin/main: $TARGET (only main is deployed)"; exit 2; }
+
 alert() {   # alert "<level>" "<text>"  (never fails the deploy)
   docker compose exec -T engine python -c \
     "import sys; from arena import alerts; alerts.send(sys.argv[2], level=sys.argv[1])" "$1" "$2" >/dev/null 2>&1 || true

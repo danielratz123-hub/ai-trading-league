@@ -550,4 +550,6 @@ version is unhealthy, Telegram either way). One-time setup:
 4. Keep the repository private (Settings -> General -> Danger Zone).
 
 A deploy that waited too long (a long agent turn) exits without changing
-anything; re-run it with Actions -> CI -> Run workflow.
+anything; re-run it from that push's run: Actions -> CI -> the run -> Re-run jobs.
+Only a push to main deploys (no pull request, branch or manual run), and
+`deploy.sh` itself refuses any commit that is not on `origin/main`.
