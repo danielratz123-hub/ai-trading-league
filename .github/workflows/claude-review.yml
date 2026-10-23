@@ -8,8 +8,9 @@ on:
 
 jobs:
   review:
-    # Skip drafts and PRs from forks (strangers on a public repo).
-    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
+    # Skip drafts, PRs from forks (strangers on a public repo) and Agent Hub
+    # PRs (hub/ branches): there, the reviewer Joe picked reviews (HUB.md).
+    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository && !startsWith(github.event.pull_request.head.ref, 'hub/')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     concurrency:

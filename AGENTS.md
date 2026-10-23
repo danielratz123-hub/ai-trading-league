@@ -17,6 +17,7 @@ starting. LAB.md and LEARNING.md explain the backtest lab and the learning layer
 | Codex | Builder: implements issues labeled `codex`, opens a PR |
 | Gemini | Builder: implements issues labeled `gemini`, opens a PR |
 | Claude | Reviewer of every PR; builder for issues labeled `claude` |
+| Agent Hub | For tasks started there (HUB.md), Joe picks the builder, the reviewer and, for plans, a manager agent; any of the three can take any role |
 | Joe | Writes issues, reads the PR conversation, merges |
 
 ## Hard rules (never break these)
@@ -29,7 +30,8 @@ starting. LAB.md and LEARNING.md explain the backtest lab and the learning layer
    `.github/workflows/`, `scripts/deploy.sh`, `scripts/restore.sh`, `arena/backup.py`,
    `docker-compose.yml`, `Dockerfile`, `Caddyfile`, `arena/api/auth.py`,
    risk limits (`arena/config.py`, `arena/risk.py`, `arena/learning/hardlimits.py`,
-   `config/learning.yaml`) and the league agents' prompts (`arena/agents/`).
+   `config/learning.yaml`), the league agents' prompts (`arena/agents/`),
+   and the Agent Hub itself (`hub/`, `Dockerfile.hub`).
 4. **No look-ahead.** Anything that reads prices for a decision must go through
    `arena/tools/context.py`, which only loads data up to the decision date.
 5. **Database changes must be backward compatible** with the live `arena.db`
@@ -40,14 +42,16 @@ starting. LAB.md and LEARNING.md explain the backtest lab and the learning layer
 
 1. One issue = one branch = one PR. Branch name: `<agent>/<issue-number>-<short-name>`
    (e.g. `codex/12-spy-benchmark`). Put `Closes #<issue>` in the PR description.
+   Tasks started from the Agent Hub (see HUB.md) get `hub/<agent>-<issue>-<name>`
+   branches; the hub pushes and opens the PR, so don't push or open PRs yourself there.
 2. Read the existing code first and extend it. Don't rewrite working modules.
 3. Keep PRs small: one roadmap item or less. If an issue is too big, say so in a
    comment and propose how to split it.
 4. Before opening the PR, run exactly what CI runs and make sure both pass:
    ```
    pip install -r requirements.txt ruff==0.6.9
-   ruff check --select F arena
-   python -m pytest -q -p no:cacheprovider arena/tests
+   ruff check --select F arena hub
+   python -m pytest -q -p no:cacheprovider arena/tests hub/tests
    ```
 5. Add tests for new behavior in `arena/tests/` (use `fakes.py` / `fake_cli.py`, no network).
 6. If you finish a ROADMAP.md item, tick it and add a short `> Done.` note, like the existing ones.

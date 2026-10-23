@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Agent Hub</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #000; --card: #0D0D0F; --card-2: #141417; --line: rgba(255,255,255,.08);
+  --ink: #F5F5F7; --ink-2: #D2D2D7; --muted: #A1A1A6; --faint: #6E6E73;
+  --brand: #FF7A1A; --brand-ink: #000;
+  --claude: #E8875F; --codex: #4C8DF6; --gemini: #9B8CFF;
+  --ok: #4CC38A; --bad: #F2707A; --warn: #F5C46B; --run: #7AB4FF;
+  --ease: cubic-bezier(.28,0,.22,1);
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.5 "Geist", system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+.m { font-family: "Geist Mono", ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums; }
+a { color: #7AB4FF; } a:hover { color: #A9CEFF; }
+:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.wrap { max-width: 1120px; margin: 0 auto; padding: 0 16px 64px; }
+
+header { display: flex; align-items: center; gap: 12px; padding: 22px 0 18px; flex-wrap: wrap; }
+.mono { width: 34px; height: 34px; border-radius: 10px; background: var(--brand); color: var(--brand-ink);
+  display: grid; place-items: center; font-weight: 700; letter-spacing: -.5px; }
+h1 { font-size: 22px; margin: 0; letter-spacing: -.3px; }
+.repo { color: var(--faint); font-size: 13px; }
+.spacer { flex: 1; }
+.agents { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px;
+  border: 1px solid var(--line); font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
+
+.grid { display: grid; grid-template-columns: 380px 1fr; gap: 16px; align-items: start; }
+@media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 22px; padding: 18px; }
+.card h2 { font-size: 15px; margin: 0 0 12px; font-weight: 600; }
+label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 6px; }
+input, textarea { width: 100%; background: var(--card-2); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 14px; padding: 10px 12px; font: inherit; }
+textarea { min-height: 96px; resize: vertical; }
+input:focus, textarea:focus { border-color: rgba(255,122,26,.6); outline: none; }
+
+.seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.seg button { padding: 10px 6px; border-radius: 14px; border: 1px solid var(--line); background: var(--card-2);
+  color: var(--ink-2); font: inherit; font-size: 13px; cursor: pointer; display: flex; gap: 6px;
+  align-items: center; justify-content: center; transition: border-color 200ms, background 200ms; }
+.seg button[aria-pressed="true"] { border-color: var(--brand); background: rgba(255,122,26,.1); color: var(--ink); }
+
+.btn { border: 1px solid var(--line); background: var(--card-2); color: var(--ink); border-radius: 999px;
+  padding: 9px 16px; font: inherit; font-size: 14px; font-weight: 500; cursor: pointer;
+  transition: transform 150ms var(--ease), opacity 150ms; }
+.btn:hover { border-color: rgba(255,255,255,.2); }
+.btn:active { transform: scale(.97); }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn.primary { background: var(--brand); color: var(--brand-ink); border-color: var(--brand); font-weight: 600; }
+.btn.good { background: var(--ok); color: #000; border-color: var(--ok); font-weight: 600; }
+.btn.ghost { background: transparent; }
+.btn.small { padding: 6px 12px; font-size: 13px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.mt { margin-top: 14px; }
+.msg { font-size: 13px; margin-top: 10px; min-height: 1em; }
+.msg.err { color: var(--bad); } .msg.ok { color: var(--ok); }
+
+.banner { border: 1px solid rgba(245,196,107,.35); color: var(--warn); border-radius: 16px; padding: 12px 14px;
+  font-size: 14px; margin-bottom: 16px; }
+
+.tasks { display: grid; gap: 8px; }
+.task { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; padding: 12px 14px;
+  border-radius: 16px; border: 1px solid var(--line); background: var(--card-2); cursor: pointer; text-align: left;
+  color: inherit; font: inherit; width: 100%; transition: border-color 200ms; }
+.task:hover, .task[aria-current="true"] { border-color: rgba(255,122,26,.5); }
+.task .t { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task .sub { font-size: 12px; color: var(--faint); }
+.status { font-size: 12px; padding: 3px 10px; border-radius: 999px; white-space: nowrap; border: 1px solid currentColor; }
+.s-queued { color: var(--muted); } .s-building, .s-fixing { color: var(--run); }
+.s-reviewing { color: var(--warn); } .s-ready { color: var(--ok); } .s-merged { color: var(--faint); }
+.s-needs_joe, .s-failed { color: var(--bad); } .s-cancelled { color: var(--faint); }
+.pulse { animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .45; } }
+.empty { color: var(--faint); font-size: 14px; padding: 18px 4px; }
+
+.detail { margin-top: 16px; }
+.detail h3 { margin: 0; font-size: 18px; }
+.meta { color: var(--muted); font-size: 13px; margin-top: 4px; display: flex; gap: 10px; flex-wrap: wrap; }
+.note { margin-top: 12px; padding: 10px 12px; border-radius: 14px; background: rgba(242,112,122,.08);
+  border: 1px solid rgba(242,112,122,.3); font-size: 14px; }
+.timeline { margin: 14px 0 0; padding: 0; list-style: none; display: grid; gap: 10px; }
+.timeline li { display: grid; grid-template-columns: 64px 1fr; gap: 10px; font-size: 13px; }
+.timeline .when { color: var(--faint); }
+.timeline pre, .log { white-space: pre-wrap; word-break: break-word; margin: 6px 0 0; background: #050506;
+  border: 1px solid var(--line); border-radius: 12px; padding: 10px; font-size: 12px; max-height: 260px; overflow: auto;
+  color: var(--ink-2); }
+details summary { cursor: pointer; color: var(--muted); font-size: 13px; margin-top: 14px; }
+.log { max-height: 420px; }
+.tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: 999px;
+  background: var(--card-2); border: 1px solid var(--line); margin-bottom: 4px; }
+.tabs button { border: 0; border-radius: 999px; padding: 8px 6px; background: transparent; color: var(--muted);
+  font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; transition: background 200ms, color 200ms; }
+.tabs button[aria-selected="true"] { background: var(--ink); color: #000; }
+.hint { color: var(--faint); }
+.warn { margin-top: 8px; font-size: 12px; color: var(--warn); }
+.stack { display: grid; gap: 16px; }
+.ptask { border: 1px solid var(--line); border-radius: 16px; padding: 12px; margin-top: 10px; background: var(--card-2); }
+.ptask .t { font-weight: 600; }
+.ptask .d { color: var(--ink-2); font-size: 13px; margin-top: 4px; white-space: pre-wrap; }
+.ptask .why { color: var(--faint); font-size: 12px; margin-top: 4px; }
+.ptask select { background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 10px;
+  padding: 5px 8px; font: inherit; font-size: 13px; }
+.pair { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+.s-waiting, .s-planning, .s-managing, .s-proposed, .s-approved, .s-done, .s-rejected { color: var(--muted); }
+.s-managing { color: var(--run); } .s-proposed { color: var(--warn); } .s-approved { color: var(--run); }
+.s-done { color: var(--ok); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="mono" aria-hidden="true">ds</div>
+    <div>
+      <h1>Agent Hub</h1>
+      <div class="repo m" id="repo"></div>
+    </div>
+    <div class="spacer"></div>
+    <div class="agents" id="agents"></div>
+    <button class="btn small ghost" id="test" title="Checks each subscription is signed in (uses a tiny bit of each plan)">Test agents</button>
+  </header>
+
+  <div class="banner" id="setup" hidden>The hub isn't set up yet: <span class="m">HUB_REPO</span> and
+    <span class="m">HUB_GITHUB_TOKEN</span> are missing in <span class="m">hub.env</span>. See HUB.md.</div>
+
+  <div class="grid">
+    <form class="card" id="new" autocomplete="off">
+      <div class="tabs" role="tablist">
+        <button type="button" role="tab" id="m-task" aria-selected="true">One task</button>
+        <button type="button" role="tab" id="m-plan" aria-selected="false">Plan with a manager</button>
+      </div>
+
+      <div id="f-task">
+        <label>Builder</label>
+        <div class="seg" data-pick="builder" role="group" aria-label="Builder"></div>
+      </div>
+      <div id="f-plan" hidden>
+        <label>Manager <span class="hint">splits your request into tasks and picks builders</span></label>
+        <div class="seg" data-pick="manager" role="group" aria-label="Manager"></div>
+      </div>
+      <label>Reviewer</label>
+      <div class="seg" data-pick="reviewer" role="group" aria-label="Reviewer"></div>
+      <div class="warn" id="selfwarn" hidden>The builder reviews its own work. A different reviewer is a safer second opinion.</div>
+
+      <div id="f-task2">
+        <label for="title">Task</label>
+        <input id="title" maxlength="200" placeholder="e.g. Add an SPY buy-and-hold player">
+        <label for="body">Details</label>
+        <textarea id="body" placeholder="What it should do, files to look at, roadmap item…"></textarea>
+        <label for="done">Done when</label>
+        <textarea id="done" style="min-height:64px" placeholder="How we know it works"></textarea>
+      </div>
+      <div id="f-plan2" hidden>
+        <label for="request">What do you want?</label>
+        <textarea id="request" style="min-height:150px" placeholder="e.g. Add an SPY buy-and-hold benchmark player, score it like the agents, and show it on the scoreboard"></textarea>
+      </div>
+      <div class="row mt"><button class="btn primary" id="start" type="submit">Start</button></div>
+      <div class="msg" id="newmsg" role="status"></div>
+    </form>
+
+    <div class="stack">
+      <section class="card" id="plans-card" hidden>
+        <h2>Plans</h2>
+        <div class="tasks" id="plans"></div>
+        <div class="detail" id="pdetail" hidden></div>
+      </section>
+      <section class="card">
+        <h2>Tasks</h2>
+        <div class="tasks" id="tasks"></div>
+        <div class="detail" id="detail" hidden></div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const LABEL = { waiting: "Waiting for previous step", queued: "Queued", building: "Building", fixing: "Fixing",
+  reviewing: "In review", ready: "Ready to merge", needs_joe: "Needs you", failed: "Failed", merged: "Merged",
+  cancelled: "Cancelled", planning: "Planning", managing: "Manager is planning", proposed: "Waiting for your OK",
+  approved: "Running", done: "Done", rejected: "Rejected" };
+const COLOR = { claude: "var(--claude)", codex: "var(--codex)", gemini: "var(--gemini)" };
+const store = { get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+                set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
+let state = null, mode = store.get("hub.mode") || "task", open = null, openPlan = null, detailKey = "", planKey = "";
+const pick = { builder: store.get("hub.builder") || "codex", reviewer: store.get("hub.reviewer") || "claude",
+               manager: store.get("hub.manager") || "claude" };
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", "X-Hub": "1", ...(opts.headers || {}) } });
+  if (r.status === 401 || r.redirected) { location.href = "/login?next=/hub/"; throw new Error("Signed out"); }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+  return data;
+}
+function ago(t) {
+  const s = Math.max(0, Date.now() / 1000 - t);
+  if (s < 60) return "now"; if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`; return `${Math.floor(s / 86400)}d`;
+}
+const label = k => (state && state.agents.find(a => a.key === k) || {}).label || k;
+function agentDot(key) { const d = el("span", "dot"); d.style.background = COLOR[key] || "var(--faint)"; return d; }
+function statusChip(st) {
+  const c = el("span", `status s-${st}`, LABEL[st] || st);
+  if (["building", "fixing", "reviewing", "managing", "approved"].includes(st)) c.classList.add("pulse");
+  return c;
+}
+function agentSelect(value, onChange) {
+  const sel = el("select");
+  state.agents.forEach(a => { const o = el("option", null, a.label); o.value = a.key; o.selected = a.key === value; sel.append(o); });
+  sel.onchange = () => onChange(sel.value);
+  return sel;
+}
+
+// ---------------------------------------------------------------- form
+function setMode(m) {
+  mode = m; store.set("hub.mode", m);
+  $("#m-task").setAttribute("aria-selected", m === "task"); $("#m-plan").setAttribute("aria-selected", m === "plan");
+  $("#f-task").hidden = $("#f-task2").hidden = m !== "task";
+  $("#f-plan").hidden = $("#f-plan2").hidden = m !== "plan";
+  $("#start").textContent = m === "task" ? "Start" : "Ask the manager for a plan";
+  selfWarn();
+}
+$("#m-task").onclick = () => setMode("task"); $("#m-plan").onclick = () => setMode("plan");
+function selfWarn() { $("#selfwarn").hidden = !(mode === "task" && pick.builder === pick.reviewer); }
+
+function renderPickers() {
+  document.querySelectorAll("[data-pick]").forEach(box => {
+    const role = box.dataset.pick;
+    if (box.children.length) return;
+    state.agents.forEach(a => {
+      const b = el("button"); b.type = "button"; b.append(agentDot(a.key), a.label);
+      b.setAttribute("aria-pressed", a.key === pick[role]);
+      b.onclick = () => { pick[role] = a.key; store.set(`hub.${role}`, a.key);
+        [...box.children].forEach(x => x.setAttribute("aria-pressed", x === b)); selfWarn(); };
+      box.append(b);
+    });
+  });
+  selfWarn();
+}
+function renderAgents() {
+  const box = $("#agents"); box.replaceChildren();
+  state.agents.forEach(a => {
+    const c = el("span", "chip"); const d = agentDot(a.key);
+    if (a.test) d.style.background = a.test.ok === null ? "var(--warn)" : a.test.ok ? "var(--ok)" : "var(--bad)";
+    c.append(d, a.label);
+    if (a.test) c.title = `${a.test.version || ""} ${a.test.detail || ""}`.trim();
+    box.append(c);
+  });
+}
+
+// ---------------------------------------------------------------- lists
+function row(dotKey, title, sub, status, current, onclick) {
+  const b = el("button", "task"); b.type = "button"; b.setAttribute("aria-current", current);
+  const mid = el("div"); mid.style.minWidth = "0";
+  mid.append(el("div", "t", title), el("div", "sub m", sub));
+  b.append(agentDot(dotKey), mid, statusChip(status)); b.onclick = onclick;
+  return b;
+}
+function renderTasks() {
+  const box = $("#tasks"); box.replaceChildren();
+  if (!state.tasks.length) { box.append(el("div", "empty", "No tasks yet. Start one on the left.")); return; }
+  state.tasks.forEach(t => box.append(row(t.agent, t.title,
+    `#${t.id} · ${label(t.agent)} → ${label(t.reviewer || "claude")}` + (t.plan_id ? ` · plan #${t.plan_id}` : "") +
+    (t.pr ? ` · PR #${t.pr}` : "") + (t.round ? ` · round ${t.round}` : "") + ` · ${ago(t.updated_at)}`,
+    t.status, open === t.id, () => { open = open === t.id ? null : t.id; detailKey = ""; renderTasks(); loadDetail(); })));
+}
+function renderPlans() {
+  $("#plans-card").hidden = !state.plans.length;
+  const box = $("#plans"); box.replaceChildren();
+  state.plans.forEach(p => box.append(row(p.manager, p.request.split("\n")[0].slice(0, 120),
+    `plan #${p.id} · manager ${label(p.manager)} · reviewer ${label(p.reviewer)}` +
+    (p.tasks && p.tasks.length ? ` · ${p.tasks.length} tasks` : "") + ` · ${ago(p.updated_at)}`,
+    p.status, openPlan === p.id, () => { openPlan = openPlan === p.id ? null : p.id; planKey = ""; renderPlans(); loadPlan(); })));
+}
+
+function actions(msg) {
+  return async (path, body, okText) => {
+    msg.className = "msg"; msg.textContent = "Working…";
+    try { await api(path, { method: "POST", body: JSON.stringify(body || {}) }); msg.className = "msg ok"; msg.textContent = okText; detailKey = planKey = ""; refresh(); }
+    catch (e) { msg.className = "msg err"; msg.textContent = e.message; }
+  };
+}
+function link(text, url) { const a = el("a", null, text); a.href = url; a.target = "_blank"; a.rel = "noopener"; return a; }
+
+// ---------------------------------------------------------------- plan detail
+async function loadPlan() {
+  const box = $("#pdetail");
+  if (!openPlan) { box.hidden = true; return; }
+  let d; try { d = await api(`/hub/api/plans/${openPlan}`); } catch (e) { return; }
+  const key = JSON.stringify([d.plan.status, d.plan.updated_at, d.tasks.map(t => [t.status, t.updated_at]), d.log.length]);
+  if (key === planKey) return; planKey = key;
+  const p = d.plan; box.hidden = false; box.replaceChildren();
+  box.append(el("h3", null, `Plan #${p.id}`));
+  const meta = el("div", "meta"); meta.append(statusChip(p.status), el("span", null, `Manager: ${label(p.manager)}`)); box.append(meta);
+  box.append(el("div", "ptask", p.request));
+  if (p.note) box.append(el("div", "note", p.note));
+  if (p.summary) box.append(el("p", null, p.summary));
+  const msg = el("div", "msg"); const act = actions(msg);
+  const choices = (p.tasks || []).map(t => ({ builder: t.builder, reviewer: t.reviewer || p.reviewer }));
+
+  if (p.status === "proposed") {
+    (p.tasks || []).forEach((t, i) => {
+      const c = el("div", "ptask");
+      c.append(el("div", "t", `${i + 1}. ${t.title}`), el("div", "d", t.details));
+      if (t.done_when) c.append(el("div", "d", `Done when: ${t.done_when}`));
+      if (t.why) c.append(el("div", "why", `Why ${label(t.builder)}: ${t.why}`));
+      const pair = el("div", "pair mt"); const w = el("span", "warn");
+      const upd = () => { w.textContent = choices[i].builder === choices[i].reviewer ? "⚠️ reviews its own work" : ""; };
+      pair.append("Builder", agentSelect(choices[i].builder, v => { choices[i].builder = v; upd(); }),
+                  "Reviewer", agentSelect(choices[i].reviewer, v => { choices[i].reviewer = v; upd(); }), w);
+      upd(); c.append(pair); box.append(c);
+    });
+    const notes = el("textarea"); notes.placeholder = "Want changes? Tell the manager what to change"; notes.style.minHeight = "64px"; notes.style.marginTop = "12px";
+    const acts = el("div", "row mt");
+    const ok = el("button", "btn primary", "Approve & start");
+    ok.onclick = () => act(`/hub/api/plans/${p.id}/approve`, { tasks: choices }, "Approved. Step 1 is starting.");
+    const ch = el("button", "btn", "Ask for changes");
+    ch.onclick = () => act(`/hub/api/plans/${p.id}/revise`, { notes: notes.value }, "Sent back to the manager.");
+    const no = el("button", "btn ghost", "Reject");
+    no.onclick = () => act(`/hub/api/plans/${p.id}/reject`, null, "Rejected.");
+    acts.append(ok, ch, no); box.append(notes, acts, msg);
+  } else if (p.status === "failed") {
+    const notes = el("textarea"); notes.placeholder = "Optional notes for the manager"; notes.style.minHeight = "64px";
+    const acts = el("div", "row mt"); const again = el("button", "btn", "Try again");
+    again.onclick = () => act(`/hub/api/plans/${p.id}/revise`, { notes: notes.value }, "Planning again.");
+    acts.append(again); box.append(notes, acts, msg);
+  } else if (d.tasks.length) {
+    const list = el("div", "tasks mt");
+    d.tasks.forEach(t => list.append(row(t.agent, `${t.plan_order + 1}. ${t.title}`,
+      `#${t.id} · ${label(t.agent)} → ${label(t.reviewer)}` + (t.pr ? ` · PR #${t.pr}` : ""), t.status, false,
+      () => { open = t.id; detailKey = ""; renderTasks(); loadDetail(); $("#detail").scrollIntoView({ behavior: "smooth" }); })));
+    box.append(list);
+    if (p.status === "approved") {
+      const acts = el("div", "row mt"); const x = el("button", "btn ghost", "Cancel plan");
+      x.onclick = () => { if (confirm("Cancel the plan? Open PRs are closed.")) act(`/hub/api/plans/${p.id}/cancel`, null, "Plan cancelled."); };
+      acts.append(x); box.append(acts, msg);
+    }
+  }
+  if (["planning", "managing"].includes(p.status)) {
+    const acts = el("div", "row mt"); const x = el("button", "btn ghost", "Cancel");
+    x.onclick = () => act(`/hub/api/plans/${p.id}/cancel`, null, "Cancelled.");
+    acts.append(x); box.append(acts, msg);
+  }
+  if (d.log) { const det = el("details"); det.append(el("summary", null, "Manager's log"), el("pre", "log m", d.log)); box.append(det); }
+}
+
+// ---------------------------------------------------------------- task detail
+async function loadDetail() {
+  const box = $("#detail");
+  if (!open) { box.hidden = true; return; }
+  let d; try { d = await api(`/hub/api/tasks/${open}`); } catch (e) { return; }
+  const key = JSON.stringify([d.task.status, d.task.updated_at, d.events.length, d.log.length]);
+  if (key === detailKey) return; detailKey = key;
+  const t = d.task; box.hidden = false; box.replaceChildren();
+  box.append(el("h3", null, t.title));
+  const meta = el("div", "meta");
+  meta.append(statusChip(t.status), el("span", null, `${label(t.agent)} builds · ${label(t.reviewer || "claude")} reviews`));
+  if (t.issue_url) meta.append(link(`Issue #${t.issue}`, t.issue_url));
+  if (t.pr_url) meta.append(link(`PR #${t.pr}`, t.pr_url));
+  if (t.branch) meta.append(el("span", "m", t.branch));
+  box.append(meta);
+  if (t.agent === t.reviewer) box.append(el("div", "warn", "The builder reviews its own work."));
+  if (t.note) box.append(el("div", "note", t.note));
+
+  const acts = el("div", "row mt"); const msg = el("div", "msg"); const act = actions(msg);
+  if (t.status === "ready") {
+    const m = el("button", "btn good", "Merge & deploy");
+    m.onclick = () => { if (confirm(`Merge PR #${t.pr}? It deploys to the live VPS.`)) act(`/hub/api/tasks/${t.id}/merge`, null, "Merged. Deploying."); };
+    acts.append(m);
+  }
+  if (["needs_joe", "failed", "ready", "reviewing", "waiting"].includes(t.status)) {
+    const ta = el("textarea"); ta.placeholder = t.status === "waiting" ? "Optional instructions" : "Optional: tell the builder what to do next"; ta.style.minHeight = "64px";
+    const c = el("button", "btn", t.status === "waiting" ? "Start now" : "Continue");
+    c.onclick = () => act(`/hub/api/tasks/${t.id}/continue`, { instructions: ta.value }, "Sent to the builder.");
+    box.append(ta); acts.append(c);
+  }
+  if (!["merged", "cancelled"].includes(t.status)) {
+    const x = el("button", "btn ghost", "Cancel");
+    x.onclick = () => { if (confirm("Cancel this task? An open PR is closed.")) act(`/hub/api/tasks/${t.id}/cancel`, null, "Cancelled."); };
+    acts.append(x);
+  }
+  box.append(acts, msg);
+
+  const ul = el("ul", "timeline");
+  d.events.forEach(ev => {
+    const li = el("li"); li.append(el("span", "when m", ago(ev.at)));
+    const body = el("div"); body.append(el("strong", null, ev.kind));
+    if (ev.text) { if (ev.text.length > 140 || ev.text.includes("\n")) body.append(el("pre", "m", ev.text)); else body.append(" ", ev.text); }
+    li.append(body); ul.append(li);
+  });
+  box.append(ul);
+  if (d.log) { const det = el("details"); det.append(el("summary", null, "Latest log"), el("pre", "log m", d.log)); box.append(det); }
+}
+
+async function refresh() {
+  try { state = await api("/hub/api/state"); } catch (e) { return; }
+  $("#repo").textContent = state.repo || "";
+  $("#setup").hidden = state.configured;
+  $("#start").disabled = !state.configured;
+  $("#test").disabled = state.testing; $("#test").textContent = state.testing ? "Testing… (a few min)" : "Test agents";
+  renderAgents(); renderPickers(); renderPlans(); renderTasks(); loadPlan(); loadDetail();
+}
+
+$("#new").onsubmit = async ev => {
+  ev.preventDefault();
+  const msg = $("#newmsg"); msg.className = "msg"; msg.textContent = "Starting…";
+  try {
+    if (mode === "task") {
+      const r = await api("/hub/api/tasks", { method: "POST", body: JSON.stringify({
+        title: $("#title").value, body: $("#body").value, done_when: $("#done").value, agent: pick.builder, reviewer: pick.reviewer }) });
+      msg.className = "msg ok"; msg.textContent = `Task #${r.id} started.`;
+      $("#title").value = $("#body").value = $("#done").value = ""; open = r.id; detailKey = "";
+    } else {
+      const r = await api("/hub/api/plans", { method: "POST", body: JSON.stringify({
+        request: $("#request").value, manager: pick.manager, reviewer: pick.reviewer }) });
+      msg.className = "msg ok"; msg.textContent = `Plan #${r.id}: ${label(pick.manager)} is planning. You'll approve it before anything starts.`;
+      $("#request").value = ""; openPlan = r.id; planKey = "";
+    }
+    refresh();
+  } catch (e) { msg.className = "msg err"; msg.textContent = e.message; }
+};
+$("#test").onclick = async () => { try { await api("/hub/api/agents/test", { method: "POST" }); } catch (e) { alert(e.message); } refresh(); };
+
+setMode(mode); refresh(); setInterval(refresh, 5000);
+</script>
+</body>
+</html>

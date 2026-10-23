@@ -20,10 +20,23 @@
 		Disallow: /
 		TXT 200
 
-	# Overwrite whatever X-Forwarded-For a visitor sends, so the login rate
-	# limit sees the real address.
-	reverse_proxy api:8000 {
-		header_up X-Forwarded-For {remote_host}
+	# Agent Hub (docker compose profile "hub", see HUB.md): only for a
+	# signed-in browser. Caddy asks the dashboard's /auth/check first; when
+	# the hub isn't running, /hub just answers 502 and nothing else changes.
+	@hub path /hub /hub/*
+	handle @hub {
+		forward_auth api:8000 {
+			uri /auth/check
+		}
+		reverse_proxy hub:8100
+	}
+
+	handle {
+		# Overwrite whatever X-Forwarded-For a visitor sends, so the login rate
+		# limit sees the real address.
+		reverse_proxy api:8000 {
+			header_up X-Forwarded-For {remote_host}
+		}
 	}
 
 	log {

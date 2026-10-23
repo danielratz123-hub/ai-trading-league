@@ -134,3 +134,15 @@ def test_on_the_pc_login_is_off_unless_a_password_is_set(tmp_path, monkeypatch):
     import arena.api.app as app_module
     with TestClient(app_module.create_app()) as c:
         assert c.get("/api/status").status_code == 200
+
+
+def test_auth_check_for_the_agent_hub(server):
+    """Caddy asks /auth/check before passing /hub requests to the Agent Hub."""
+    r = server.get("/auth/check", headers={"X-Forwarded-Uri": "/hub/"}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/login?next=/hub/"
+    r = server.get("/auth/check", headers={"X-Forwarded-Uri": "/hub/api/state"}, follow_redirects=False)
+    assert r.status_code == 401
+    r = server.get("/auth/check", headers={"X-Forwarded-Uri": "//evil.com"}, follow_redirects=False)
+    assert r.headers["location"] == "/login?next=/"
+    login(server)
+    assert server.get("/auth/check", headers={"X-Forwarded-Uri": "/hub/"}).status_code == 204
