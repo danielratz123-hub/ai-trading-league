@@ -5,3 +5,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 league.bundle
+
+# gemini-cli (GitHub Action)
+.gemini/
+gha-creds-*.json
