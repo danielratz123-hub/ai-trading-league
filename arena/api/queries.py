@@ -10,7 +10,7 @@ import json
 import math
 import sqlite3
 
-from .. import ledger, scoring
+from .. import ledger, scoring, stats
 from ..config import SETTINGS
 from ..prices import get_price, latest_price_date
 
@@ -74,6 +74,139 @@ def league_status(conn) -> dict:
 # --------------------------------------------------------------------------
 # Performance
 # --------------------------------------------------------------------------
+
+
+def live_stats(conn: sqlite3.Connection) -> dict:
+    """SELECT-only LIVE stats. Curves are growth indices, excluding cash flows.
+
+    Slot transfers are inferred from snapshot cash and intervening fills,
+    including learning-layer tilts without a post-trade snapshot. Transfers
+    use a start-of-snapshot-interval convention. Slot identity includes retired/reused
+    slots, not strategy versions. Closed trades are full position episodes,
+    as in the lab, including partial exits, commissions and short borrow.
+    """
+    end = conn.execute("SELECT MAX(date) FROM snapshots WHERE kind='daily'").fetchone()[0]
+    agents = []
+    for agent in ledger.agent_ids(conn):
+        cutoff = conn.execute("SELECT MAX(seq) FROM snapshots WHERE agent_id=? AND kind='daily' AND date<=?",
+                              (agent, end)).fetchone()[0]
+        snaps = conn.execute("SELECT * FROM snapshots WHERE agent_id=? AND seq<=? ORDER BY seq",
+                             (agent, cutoff)).fetchall()
+        deps = conn.execute("SELECT seq, amount FROM deposits WHERE agent_id=? ORDER BY seq", (agent,)).fetchall()
+        fills = conn.execute("SELECT * FROM trades WHERE agent_id=? AND seq<=? ORDER BY seq",
+                             (agent, cutoff)).fetchall()
+        # Replay fills: pnl=0 can mean an opening fill OR a breakeven close.
+        events = [(r["seq"], "trade", r) for r in fills]
+        events += [(r["seq"], "borrow", r) for r in conn.execute(
+            "SELECT * FROM borrow_fees WHERE agent_id=? AND seq<=?", (agent, cutoff))]
+        events += [(r["seq"], "adjust", r) for r in conn.execute(
+            "SELECT * FROM corporate_actions WHERE seq<=?", (cutoff,))]
+        positions, closed = {}, []
+        for _, kind, row in sorted(events, key=lambda e: e[0]):
+            if kind == "adjust":
+                for (_, ticker), ep in positions.items():
+                    if ticker == row["ticker"]:
+                        ep["shares"] /= row["factor"]
+                continue
+            key = (row["slot"], row["ticker"])
+            if kind == "borrow":
+                if key in positions:
+                    positions[key]["pnl"] -= row["amount"]
+                continue
+            ep = positions.get(key, {"shares": 0.0, "pnl": 0.0})
+            old, delta = ep["shares"], row["shares"]
+            closing = min(abs(old), abs(delta)) if old * delta < 0 else 0.0
+            closing_fee = row["commission"] * closing / abs(delta) if delta else 0.0
+            ep["pnl"] += row["realized_pnl"] - closing_fee
+            if closing and closing >= abs(old) - ledger.DUST:
+                closed.append((row["date"], row["slot"], ep["pnl"]))
+                ep = {"shares": 0.0, "pnl": 0.0}
+            ep["pnl"] -= row["commission"] - closing_fee
+            ep["shares"] = old + delta
+            if abs(ep["shares"]) < ledger.DUST:
+                positions.pop(key, None)
+            else:
+                positions[key] = ep
+
+        indices, curves, previous = {}, {}, None
+        agent_index, agent_curve = 1.0, {}
+        # Reconstruct cash at each snapshot: slot equity minus marked holdings.
+        # Changes in cash not explained by fills/borrow are capital transfers.
+        adjustments = conn.execute("SELECT * FROM corporate_actions ORDER BY seq").fetchall()
+        cash_events = [(r["seq"], "trade", r) for r in fills]
+        cash_events += [(r["seq"], "borrow", r) for r in conn.execute(
+            "SELECT * FROM borrow_fees WHERE agent_id=? AND seq<=?", (agent, cutoff))]
+        cash_events += [(r["seq"], "adjust", r) for r in adjustments if cutoff and r["seq"] <= cutoff]
+        cash_events.sort(key=lambda e: e[0])
+        event_index, quantities, previous_cash = 0, {}, {}
+        funded, marks = set(), {}
+        for snap in snaps:
+            cash_changes = {}
+            while event_index < len(cash_events) and cash_events[event_index][0] < snap["seq"]:
+                _, kind, row = cash_events[event_index]
+                event_index += 1
+                if kind == "adjust":
+                    for key in quantities:
+                        if key[1] == row["ticker"]:
+                            quantities[key] /= row["factor"]
+                    continue
+                slot = str(row["slot"])
+                if kind == "trade":
+                    key = (slot, row["ticker"])
+                    quantities[key] = quantities.get(key, 0.0) + row["shares"]
+                    change = -row["shares"] * row["fill_price"] - row["commission"]
+                else:
+                    change = -row["amount"]
+                cash_changes[slot] = cash_changes.get(slot, 0.0) + change
+            slot_eq = json.loads(snap["slots_json"])
+            prev_slots = json.loads(previous["slots_json"]) if previous else {}
+            added = sum(d["amount"] for d in deps
+                        if (previous["seq"] if previous else 0) < d["seq"] < snap["seq"])
+            base = previous["equity"] if previous else added
+            if base > 0:
+                agent_index *= (snap["equity"] - (added if previous else 0)) / base
+            holdings = {}
+            for (slot, ticker), quantity in quantities.items():
+                if abs(quantity) < ledger.DUST:
+                    continue
+                key = (ticker, snap["date"], snap["price_field"])
+                if key not in marks:
+                    marks[key] = ledger.mark_price(conn, *key)[0]
+                # Stored prices may have been adjusted since this snapshot.
+                factor = math.prod(r["factor"] for r in adjustments
+                                   if r["ticker"] == ticker and r["seq"] > snap["seq"])
+                holdings[slot] = holdings.get(slot, 0.0) + quantity / factor * marks[key]
+            for slot in set(slot_eq) | set(prev_slots) | set(holdings):
+                value, old = slot_eq.get(slot, 0.0), prev_slots.get(slot, 0.0)
+                cash = value - holdings.get(slot, 0.0)
+                flow = cash - previous_cash.get(slot, 0.0) - cash_changes.get(slot, 0.0)
+                # Ledger snapshots round slot equity to six decimal places.
+                if abs(flow) < 1e-6:
+                    flow = 0.0
+                capital = old + flow
+                if capital > 1e-6:
+                    funded.add(slot)
+                    indices[slot] = indices.get(slot, 1.0) * value / capital
+                elif old > 1e-6 and flow < 0:
+                    # A retired slot can be left owing its closing fill costs.
+                    indices[slot] = indices.get(slot, 1.0) * (1 + value / old)
+                previous_cash[slot] = cash
+                if snap["kind"] == "daily" and slot in funded:
+                    curves.setdefault(slot, {})[snap["date"]] = indices.get(slot, 1.0)
+            if snap["kind"] == "daily":
+                agent_curve[snap["date"]] = agent_index
+            previous = snap
+        slots = []
+        for row in conn.execute("SELECT slot, name FROM slots WHERE agent_id=? AND slot!=0 ORDER BY slot", (agent,)):
+            slot = row["slot"]
+            slots.append({"slot": slot, "name": row["name"], "windows": stats.window_stats(
+                list(curves.get(str(slot), {}).items()), [(d, p) for d, s, p in closed if s == slot],
+                as_of=end, initial_equity=1.0)})
+        agents.append({"agent": agent, "windows": stats.window_stats(
+            list(agent_curve.items()), [(d, p) for d, _, p in closed], as_of=end, initial_equity=1.0),
+            "slots": slots})
+    return {"as_of": end, "equity_curve_unit": "growth_index", "agents": agents}
+
 
 def _performance(conn, agent_id: str) -> list[dict]:
     """Daily points with equity and a deposit-free performance index.
