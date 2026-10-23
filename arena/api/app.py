@@ -122,6 +122,10 @@ def create_app() -> FastAPI:
     def equity(conn=Depends(read_conn)):
         return queries.equity_curves(conn)
 
+    @app.get("/api/stats")
+    def stats(conn=Depends(read_conn)):
+        return queries.live_stats(conn)
+
     @app.get("/api/agents/{agent_id}")
     def agent(agent_id: str, conn=Depends(read_conn)):
         return queries.agent_detail(conn, _agent(conn, agent_id))

@@ -69,6 +69,26 @@ def test_equity_curves_share_dates_and_index_ignores_deposits(client):
         assert jumps_e > 0.5 and jumps_i < 0.2
 
 
+def test_live_stats_endpoint(client):
+    c, path, _ = client
+    conn = connect(path)
+    before = list(conn.iterdump())
+    response = c.get("/api/stats")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["as_of"] == conn.execute("SELECT MAX(date) FROM snapshots WHERE kind='daily'").fetchone()[0]
+    assert {a["agent"] for a in data["agents"]} == {"claude", "gpt"}
+    for agent in data["agents"]:
+        assert set(agent["windows"]) == {"weekly", "monthly", "all_time"}
+        assert agent["windows"]["all_time"]["equity_curve"]
+        assert agent["slots"] and all(s["slot"] > 0 for s in agent["slots"])
+        assert all("windows" in s for s in agent["slots"])
+    assert list(conn.iterdump()) == before
+    assert c.post("/api/stats").status_code == 405
+    assert c.delete("/api/stats").status_code == 405
+    conn.close()
+
+
 def test_agent_detail_holdings_exposures_and_code(client):
     c, _, _ = client
     d = c.get("/api/agents/claude").json()
