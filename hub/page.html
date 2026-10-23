@@ -108,6 +108,8 @@ details summary { cursor: pointer; color: var(--muted); font-size: 13px; margin-
 .hint { color: var(--faint); }
 .warn { margin-top: 8px; font-size: 12px; color: var(--warn); }
 .stack { display: grid; gap: 16px; }
+.agenterr { margin: -6px 0 16px; display: grid; gap: 6px; font-size: 13px; color: var(--bad); }
+.agenterr div { border: 1px solid rgba(242,112,122,.3); border-radius: 12px; padding: 8px 12px; word-break: break-word; }
 .ptask { border: 1px solid var(--line); border-radius: 16px; padding: 12px; margin-top: 10px; background: var(--card-2); }
 .ptask .t { font-weight: 600; }
 .ptask .d { color: var(--ink-2); font-size: 13px; margin-top: 4px; white-space: pre-wrap; }
@@ -132,6 +134,8 @@ details summary { cursor: pointer; color: var(--muted); font-size: 13px; margin-
     <div class="agents" id="agents"></div>
     <button class="btn small ghost" id="test" title="Checks each subscription is signed in (uses a tiny bit of each plan)">Test agents</button>
   </header>
+
+  <div class="agenterr" id="agenterr" hidden></div>
 
   <div class="banner" id="setup" hidden>The hub isn't set up yet: <span class="m">HUB_REPO</span> and
     <span class="m">HUB_GITHUB_TOKEN</span> are missing in <span class="m">hub.env</span>. See HUB.md.</div>
@@ -204,7 +208,12 @@ async function api(path, opts = {}) {
   const r = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", "X-Hub": "1", ...(opts.headers || {}) } });
   if (r.status === 401 || r.redirected) { location.href = "/login?next=/hub/"; throw new Error("Signed out"); }
   const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+  if (!r.ok) {
+    // FastAPI validation errors are a list of {loc, msg}; turn them into words.
+    const d = data.detail;
+    const text = Array.isArray(d) ? d.map(x => `${(x.loc || []).slice(-1)[0] || "field"}: ${x.msg}`).join("; ") : d;
+    throw new Error(text || `HTTP ${r.status}`);
+  }
   return data;
 }
 function ago(t) {
@@ -254,6 +263,10 @@ function renderPickers() {
 }
 function renderAgents() {
   const box = $("#agents"); box.replaceChildren();
+  const errs = $("#agenterr"); errs.replaceChildren();
+  state.agents.filter(a => a.test && a.test.ok === false).forEach(a =>
+    errs.append(el("div", "m", `${a.label}: ${a.test.detail || "not working"}`)));
+  errs.hidden = !errs.children.length;
   state.agents.forEach(a => {
     const c = el("span", "chip"); const d = agentDot(a.key);
     if (a.test) d.style.background = a.test.ok === null ? "var(--warn)" : a.test.ok ? "var(--ok)" : "var(--bad)";
@@ -418,7 +431,11 @@ async function refresh() {
 
 $("#new").onsubmit = async ev => {
   ev.preventDefault();
-  const msg = $("#newmsg"); msg.className = "msg"; msg.textContent = "Starting…";
+  const msg = $("#newmsg");
+  const bad = text => { msg.className = "msg err"; msg.textContent = text; };
+  if (mode === "task" && $("#title").value.trim().length < 3) return bad("Write the task first (at least a few words).");
+  if (mode === "plan" && $("#request").value.trim().length < 10) return bad("Describe what you want first (at least a sentence).");
+  msg.className = "msg"; msg.textContent = "Starting…";
   try {
     if (mode === "task") {
       const r = await api("/hub/api/tasks", { method: "POST", body: JSON.stringify({
