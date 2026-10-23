@@ -1,0 +1,43 @@
+# Agent Hub image (docker compose service "hub", see HUB.md). Separate from
+# the league's image: it adds git and the Gemini CLI, and holds no league code.
+FROM node:22.16.0-bookworm-slim AS node
+
+FROM python:3.14.3-slim-bookworm
+
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+
+# Same CLI versions as the league image, plus Gemini. Change them on purpose.
+ARG CLAUDE_CODE_VERSION=2.1.293
+ARG CODEX_VERSION=0.161.0
+ARG GEMINI_CLI_VERSION=0.65.0
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends git ca-certificates tzdata ripgrep \
+ && rm -rf /var/lib/apt/lists/* \
+ && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "@openai/codex@${CODEX_VERSION}" \
+      "@google/gemini-cli@${GEMINI_CLI_VERSION}" \
+ && npm cache clean --force
+
+# The league's requirements, so the CI checks run fast inside task copies
+# (a task that changes requirements.txt installs the difference per user).
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt ruff==0.6.9
+COPY hub ./hub
+
+ARG APP_UID=1000
+RUN useradd --create-home --uid ${APP_UID} hub \
+ && mkdir -p /hub/data /home/hub/.claude /home/hub/.codex /home/hub/.gemini \
+ && chown -R hub:hub /hub /home/hub
+USER hub
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
+    TZ=Asia/Jerusalem \
+    HUB_DATA=/hub/data \
+    CLAUDE_CONFIG_DIR=/home/hub/.claude \
+    CODEX_HOME=/home/hub/.codex \
+    PATH=/home/hub/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+EXPOSE 8100
+CMD ["python", "-m", "hub"]

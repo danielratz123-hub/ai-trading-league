@@ -7,6 +7,7 @@ the ledger moves the money, and a dashboard (phase 4) shows who's winning.
 
 Coding agents (Codex, Gemini, Claude) follow **[AGENTS.md](AGENTS.md)**. New work starts as a GitHub issue
 from the "Agent task" template; every PR gets an automatic Claude review.
+The **[Agent Hub](HUB.md)** (`/hub` on the site) runs the whole loop for you on your subscriptions.
 
 ## Quick start (the easy way)
 

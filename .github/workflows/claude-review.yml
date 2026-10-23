@@ -48,6 +48,8 @@ jobs:
             If the verdict is "Needs fixes", end the summary with one line for the builder:
             - branch starts with `codex/`  -> `@codex please fix the Must-fix points above`
             - branch starts with `gemini/` -> `@gemini-cli please fix the Must-fix points above`
+            - branch starts with `hub/`    -> ping nobody: the Agent Hub reads your verdict
+              and sends the fixes to the builder itself
             - otherwise leave it for Joe.
             If this is already your 4th review on this PR and it still needs fixes,
             use "⛔ Stop, Joe must look" instead and don't ping a builder.

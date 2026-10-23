@@ -30,9 +30,9 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt ruff==0.6.9
       - name: Lint (pyflakes rules)
-        run: ruff check --select F arena
+        run: ruff check --select F arena hub
       - name: Tests (no network, no keys)
-        run: python -m pytest -q -p no:cacheprovider arena/tests
+        run: python -m pytest -q -p no:cacheprovider arena/tests hub/tests
 
   deploy:
     needs: test

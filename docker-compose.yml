@@ -113,6 +113,41 @@ services:
       start_period: 30s
       retries: 3
 
+  # Agent Hub: hands coding tasks to Claude / Codex / Gemini on your
+  # subscriptions and opens PRs (see HUB.md). OFF unless .env has
+  # COMPOSE_PROFILES=hub. Its own image, volumes and hub.env: it never sees the
+  # league's database, .env or CLI logins, and the league's health check and
+  # rollback ignore it.
+  hub:
+    profiles: ["hub"]
+    build:
+      context: .
+      dockerfile: Dockerfile.hub
+      args:
+        APP_UID: ${APP_UID:-1000}
+    image: ai-trading-league-hub:latest
+    env_file:
+      - path: hub.env
+        required: false
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    volumes:
+      - hub-data:/hub/data
+      - hub-claude:/home/hub/.claude
+      - hub-codex:/home/hub/.codex
+      - hub-gemini:/home/hub/.gemini
+    networks: [web, default]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/hub/healthz', timeout=10)"]
+      interval: 60s
+      timeout: 15s
+      start_period: 30s
+      retries: 3
+
 networks:
   web:
 
@@ -123,3 +158,7 @@ volumes:
   codex-home:
   caddy-data:
   caddy-config:
+  hub-data:
+  hub-claude:
+  hub-codex:
+  hub-gemini:

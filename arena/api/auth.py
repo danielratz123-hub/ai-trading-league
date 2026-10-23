@@ -40,7 +40,7 @@ SESSION_SECONDS = 7 * 86400
 ADMIN_TOKEN_MIN = 32
 PER_CLIENT, GLOBAL, WINDOW = 5, 50, 15 * 60
 # Reachable without a session.
-OPEN_PATHS = {"/login", "/logout", "/healthz", "/style.css", "/favicon.ico"}
+OPEN_PATHS = {"/login", "/logout", "/healthz", "/style.css", "/favicon.ico", "/auth/check"}
 
 # scrypt cost: ~50 ms and 16 MB per check on a small VPS.
 _N, _R, _P = 2**14, 8, 1
@@ -260,6 +260,19 @@ def login(request: Request, password: str = Form(...), next: str = Form("/")):
     resp.set_cookie(COOKIE, make_session(), max_age=SESSION_SECONDS, httponly=True,
                     secure=True, samesite="strict", path="/")
     return resp
+
+
+@router.get("/auth/check")
+def auth_check(request: Request) -> Response:
+    """Caddy asks this before passing a request to the Agent Hub (/hub):
+    204 = signed in. Otherwise pages go to the login and API calls get 401.
+    Caddy sends the original path in X-Forwarded-Uri."""
+    if not login_enabled() or valid_session(request.cookies.get(COOKIE)):
+        return Response(status_code=204)
+    uri = request.headers.get("x-forwarded-uri", "/hub/")
+    if uri.startswith("/hub/api/"):
+        return JSONResponse({"detail": "Not signed in."}, status_code=401)
+    return RedirectResponse(f"/login?next={quote(_safe_next(uri))}", status_code=303)
 
 
 @router.post("/logout")
