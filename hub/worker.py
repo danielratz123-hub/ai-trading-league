@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import re
 import threading
 import time
 import traceback
@@ -30,13 +32,29 @@ from .gitops import Repo, branch_name
 
 log = logging.getLogger("hub")
 
+# Never merged automatically, whatever the review says: Joe merges these.
+PROTECTED = re.compile(r"^(\.github/|scripts/(deploy|restore)\.sh$|docker-compose\.yml$|Dockerfile|Caddyfile$|"
+                       r"requirements\.txt$|arena/api/auth\.py$|arena/config\.py$|arena/risk\.py$|"
+                       r"arena/backup\.py$|arena/learning/hardlimits\.py$|config/learning\.yaml$|"
+                       r"arena/agents/|hub/)")
+
+
+def free_mb() -> int | None:
+    try:
+        for line in open("/proc/meminfo"):
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) // 1024
+    except OSError:
+        pass
+    return None
+
 
 class Worker:
     def __init__(self, cfg: Config, db: DB, gh, *,
                  repo_factory: Callable[[dict], Repo] | None = None,
                  run_agent=agents.run_agent, run_checks=agents.run_checks,
                  notify: Callable[[str], None] = lambda text: None,
-                 clock: Callable[[], float] = time.time):
+                 clock: Callable[[], float] = time.time, threaded: bool = False):
         self.cfg, self.db, self.gh = cfg, db, gh
         self.repo_factory = repo_factory or (lambda t: Repo(
             cfg.work_dir / (f"plan-{t['plan']}" if "plan" in t else f"task-{t['id']}"),
@@ -45,7 +63,12 @@ class Worker:
         self.notify, self.clock = notify, clock
         self.wake = threading.Event()
         self.lock = threading.Lock()     # one state change at a time (worker vs. web)
-        self.current: dict | None = None  # what's running right now, for the page
+        # Jobs running now: {"t12" / "r12" / "p3": {agent, role, title, log, ...}}.
+        # threaded=False (tests) runs one job per step, in this thread.
+        self.threaded = threaded
+        self.jobs: dict[str, dict] = {}
+        self.jobs_lock = threading.Lock()
+        self._here = threading.local()   # which job this thread is doing
 
     # ------------------------------------------------------------------ loop
 
@@ -69,7 +92,7 @@ class Worker:
             self.wake.clear()
 
     def step(self) -> None:
-        """Check GitHub, then do at most one agent job."""
+        """Check GitHub, then start agent jobs while there's room."""
         for t in self.db.with_status("reviewing", "ready"):
             try:
                 self.poll(t)
@@ -81,15 +104,72 @@ class Worker:
                     self.poll_deploy(t)
                 except Exception as e:  # noqa: BLE001
                     log.warning("deploy check of task %s failed: %s", t["id"], e)
+        self.dispatch()
+
+    # ------------------------------------------------------------- parallel runs
+
+    def max_parallel(self) -> int:
+        n = self.db.setting("max_parallel", None)
+        return max(1, min(int(n if n else self.cfg.max_parallel), 3))
+
+    def waiting_jobs(self) -> list[tuple[str, str, Callable[[], None], str]]:
+        """(job key, agent, what to call, title) in priority order: reviews
+        first (they unblock merges), then managers, then builds."""
+        out = []
         for t in self.db.with_status("reviewing"):
             if t["head_sha"] and t["review_sha"] != t["head_sha"]:
-                return self.run_review(t)
-        planning = self.db.plans_with_status("planning")
-        if planning:
-            return self.run_manager(planning[0])
-        queued = self.db.with_status("queued")
-        if queued:
-            return self.run(queued[0])
+                out.append((f"r{t['id']}", self._reviewer(t), lambda t=t: self.run_review(t), t["title"]))
+        for p in self.db.plans_with_status("planning"):
+            out.append((f"p{p['id']}", self._first(p["manager"], "claude"),
+                        lambda p=p: self.run_manager(p), p["request"][:120]))
+        for t in self.db.with_status("queued"):
+            out.append((f"t{t['id']}", t["agent"], lambda t=t: self.run(t), t["title"]))
+        return out
+
+    def room(self) -> str | None:
+        """None if one more run fits next to the league, else why not."""
+        if len(self.jobs) >= self.max_parallel():
+            return "limit"
+        if not self.jobs:
+            return None                  # the first run always goes
+        try:
+            load = os.getloadavg()[0] / (os.cpu_count() or 1)
+        except OSError:
+            load = 0.0
+        if load > self.cfg.max_load:
+            return f"CPU busy ({load:.0%} per core)"
+        mb = free_mb()
+        if mb is not None and mb < self.cfg.min_free_mb:
+            return f"low memory ({mb} MB free)"
+        return None
+
+    def dispatch(self) -> None:
+        busy_agents = {j["agent"] for j in self.jobs.values()}
+        for key, agent, call, title in self.waiting_jobs():
+            if key in self.jobs or agent in busy_agents:
+                continue                 # already running / that subscription is busy
+            if self.room():
+                return
+            with self.jobs_lock:
+                self.jobs[key] = {"agent": agent, "title": title, "role": "", "model": "",
+                                  "log": "", "started": self.clock()}
+            busy_agents.add(agent)
+            if not self.threaded:
+                self._job(key, call)
+                return                   # tests: one job per step
+            threading.Thread(target=self._job, args=(key, call), daemon=True, name=f"job-{key}").start()
+
+    def _job(self, key: str, call: Callable[[], None]) -> None:
+        self._here.job = key
+        try:
+            call()
+        except Exception:  # noqa: BLE001 - a job must never kill the hub
+            log.error("job %s failed:\n%s", key, traceback.format_exc())
+        finally:
+            with self.jobs_lock:
+                self.jobs.pop(key, None)
+            self._here.job = None
+            self.wake.set()              # a slot is free: look for the next job
 
     # ------------------------------------------------------------- agents
 
@@ -131,15 +211,19 @@ class Worker:
         a = dict(self.cfg.agents[key])
         a["model"] = model
         a["effort"] = self.agent_settings(key)["effort"]
-        self.current = {"role": role, "agent": key, "model": model, "title": title, "task_id": task_id,
-                        "plan_id": plan_id, "log": str(log_path), "started": self.clock()}
+        self._show(role=role, agent=key, model=model, title=title, task_id=task_id, plan_id=plan_id,
+                   log=str(log_path))
         started = time.monotonic()
-        try:
-            result = self.run_agent(a, prompt, cwd, log_path, self.cfg.agent_timeout, should_stop)
-        finally:
-            self.current = None
+        result = self.run_agent(a, prompt, cwd, log_path, self.cfg.agent_timeout, should_stop)
         self.db.add_run(key, model, role, task_id, plan_id, time.monotonic() - started, result.ok)
         return result
+
+    def _show(self, **info) -> None:
+        """Update what the page shows for this thread's job."""
+        job = getattr(self._here, "job", None)
+        with self.jobs_lock:
+            if job in self.jobs:
+                self.jobs[job].update(info, started=self.jobs[job].get("started") or self.clock())
 
     def _stopping(self, task_id: int) -> Callable[[], bool]:
         return lambda: bool((self.db.get(task_id) or {}).get("cancel"))
@@ -233,12 +317,9 @@ class Worker:
         log_path = self.cfg.log_dir / f"task-{tid}-r{t['round']}-checks.log"
 
         def run_checks():
-            self.current = {"role": "checks", "agent": t["agent"], "model": "", "title": t["title"],
-                            "task_id": tid, "plan_id": None, "log": str(log_path), "started": self.clock()}
-            try:
-                return self.run_checks(repo.path, log_path, self.cfg.check_timeout, self._stopping(tid))
-            finally:
-                self.current = None
+            self._show(role="checks", agent=t["agent"], model="", title=t["title"], task_id=tid,
+                       log=str(log_path))
+            return self.run_checks(repo.path, log_path, self.cfg.check_timeout, self._stopping(tid))
 
         checks = run_checks()
         tries = 0
@@ -327,6 +408,9 @@ class Worker:
         if pr.get("state") == "closed":
             self._stop(t, "cancelled", f"PR #{t['pr']} was closed", tell=False)
             return
+        conflict = pr.get("mergeable") is False and pr.get("mergeable_state") == "dirty"
+        if conflict and (t["status"] == "ready" or t["review_sha"] == t["head_sha"]):
+            return self._fix_conflict(t)
         if t["status"] == "ready":
             return
         head = (pr.get("head") or {}).get("sha")
@@ -349,6 +433,8 @@ class Worker:
         if verdict == review.OK and ci == "success":
             self.db.update(tid, status="ready", note=None)
             self.db.event(tid, "ready", "✅ Ready to merge")
+            if t.get("auto_merge"):
+                return self._auto_merge(self.db.get(tid))
             self.notify(f"✅ Task #{tid} ({t['title']}) is ready to merge: PR #{t['pr']}.")
             return
         if verdict == review.STOP:
@@ -361,6 +447,33 @@ class Worker:
         self.db.update(tid, status="queued", round=t["round"] + 1, feedback=feedback)
         self.db.event(tid, "fix", f"Fixes needed: starting round {t['round'] + 1}")
         self.wake.set()
+
+    def _fix_conflict(self, t: dict) -> None:
+        if t["round"] >= self.cfg.max_rounds + 2:
+            return self._stop(t, "needs_joe", "The branch conflicts with main and the builder couldn't fix it.")
+        self.db.update(t["id"], status="queued", round=t["round"] + 1, feedback=prompts.CONFLICT)
+        self.db.event(t["id"], "conflict", "Main changed under this PR: the builder merges main and "
+                                           f"fixes the conflict (round {t['round'] + 1})")
+        self.wake.set()
+
+    def _auto_merge(self, t: dict) -> None:
+        """Joe asked for this task to merge itself. Never for protected files."""
+        try:
+            touched = [f for f in self.gh.pr_files(t["pr"]) if PROTECTED.match(f)]
+        except Exception as e:  # noqa: BLE001
+            touched = [f"(couldn't list the files: {e})"]
+        if touched:
+            note = ("Not merged automatically: it changes " + ", ".join(touched[:4])
+                    + (" and more" if len(touched) > 4 else "") + ". Check it and merge it yourself.")
+            self.db.update(t["id"], note=note)
+            self.db.event(t["id"], "auto-merge", note)
+            self.notify(f"✅ Task #{t['id']} ({t['title']}) is ready, but you must merge it: {note}")
+            return
+        err = self.merge(t["id"], how="merged automatically (✅ review, CI green)")
+        if err:
+            self.db.event(t["id"], "auto-merge", f"Couldn't merge automatically: {err}")
+        else:
+            self.notify(f"🤖 Task #{t['id']} ({t['title']}) was merged automatically and is deploying.")
 
     def _merged(self, t: dict, sha: str, how: str) -> None:
         """A PR got merged: watch its deploy, clean up the branch and work copy."""
@@ -395,13 +508,13 @@ class Worker:
         """Start the next task of the plan, or finish the plan."""
         if not t.get("plan_id"):
             return
-        rest = [x for x in self.db.plan_tasks(t["plan_id"]) if x["status"] == "waiting"]
-        if rest:
-            nxt = rest[0]
-            self.db.update(nxt["id"], status="queued")
-            self.db.event(nxt["id"], "start", f"Previous plan step (task #{t['id']}) merged: starting")
-            self.wake.set()
-            return
+        steps = self.db.plan_tasks(t["plan_id"])
+        merged = {x["id"] for x in steps if x["status"] == "merged"}
+        for x in steps:
+            if x["status"] == "waiting" and set(self.db.after(x)) <= merged:
+                self.db.update(x["id"], status="queued")
+                self.db.event(x["id"], "start", f"Step {t['plan_order'] + 1} (task #{t['id']}) merged: starting")
+                self.wake.set()
         plan = self.db.plan(t["plan_id"])
         if plan and plan["status"] == "approved" and all(
                 x["status"] in ("merged", "cancelled") for x in self.db.plan_tasks(t["plan_id"])):
@@ -459,16 +572,23 @@ class Worker:
                 for key in ("builder", "reviewer"):
                     if pick.get(key) in self.cfg.agents:
                         task[key] = pick[key]
+            ids: list[int] = []
             for i, task in enumerate(tasks):
                 body = task["details"] + (f"\n\nPart of plan #{plan_id}: {p['request'][:500]}")
                 reviewer = task.get("reviewer") or p["reviewer"]
+                after_steps = task.get("after", [i - 1] if i else [])
+                after = [ids[j] for j in after_steps if 0 <= j < len(ids)]
                 tid = self.db.create_task(task["title"], body, task["done_when"], task["builder"],
-                                          reviewer, plan_id, i, status="queued" if i == 0 else "waiting",
+                                          reviewer, plan_id, i, status="waiting" if after else "queued",
                                           reviewer_model=(p.get("reviewer_model") or "")
-                                          if reviewer == p["reviewer"] else "")
+                                          if reviewer == p["reviewer"] else "",
+                                          after=after, auto_merge=bool(p.get("auto_merge")))
+                ids.append(tid)
+                waits = (f"; starts after step {', '.join(str(j + 1) for j in after_steps)}"
+                         if after else "; starts right away")
                 self.db.event(tid, "created", f"Plan #{plan_id}, step {i + 1} of {len(tasks)}: "
                                               f"{self.label(task['builder'])} builds, "
-                                              f"{self.label(task.get('reviewer') or p['reviewer'])} reviews")
+                                              f"{self.label(reviewer)} reviews{waits}")
             self.db.update_plan(plan_id, status="approved", tasks_json=json.dumps(tasks))
         self.wake.set()
         return None
@@ -527,14 +647,17 @@ class Worker:
             self.db.event(task_id, "continue", text or "Continue")
         self.wake.set()
 
-    def merge(self, task_id: int) -> str | None:
+    def merge(self, task_id: int, how: str = "merged from the hub") -> str | None:
         """Merge a ready PR. Returns an error message, or None."""
         with self.lock:
             t = self.db.get(task_id)
             if not t or t["status"] != "ready":
                 return "Only a task marked ready can be merged here."
-            sha = self.gh.merge_pr(t["pr"], f"[{t['agent']}] {t['title']} (#{t['pr']})")
-            self._merged(t, sha, "merged from the hub")
+            try:
+                sha = self.gh.merge_pr(t["pr"], f"[{t['agent']}] {t['title']} (#{t['pr']})")
+            except Exception as e:  # noqa: BLE001 - e.g. a conflict GitHub found first
+                return str(e)
+            self._merged(t, sha, how)
         self._after_merge(t)
         return None
 

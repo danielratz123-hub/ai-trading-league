@@ -48,7 +48,8 @@ class FakeGitHub:
     def pr(self, n):
         p = self.prs[n]
         return {"state": p["state"], "merged": p["merged"], "head": {"sha": p["head_sha"]},
-                "merge_commit_sha": f"merge{n}" if p["merged"] else None}
+                "merge_commit_sha": f"merge{n}" if p["merged"] else None,
+                "mergeable": p.get("mergeable"), "mergeable_state": p.get("mergeable_state", "clean")}
 
     def comment(self, n, body):
         self.comments.append((n, body))
@@ -63,6 +64,9 @@ class FakeGitHub:
         self.merged.append(n)
         self.prs[n]["merged"] = True
         return f"merge{n}"
+
+    def pr_files(self, n):
+        return list(getattr(self, "files", ["arena/summary.py"]))
 
     def delete_branch(self, branch):
         self.deleted = getattr(self, "deleted", []) + [branch]
@@ -129,6 +133,14 @@ BEGIN_PLAN
 {"summary": "Two steps.", "tasks": [
  {"title": "SPY player", "details": "Add it in arena/league.py", "done_when": "tests", "builder": "codex", "why": "fast"},
  {"title": "Show SPY on the scoreboard", "details": "arena/web", "done_when": "visible", "builder": "nobody"}]}
+END_PLAN
+"""
+
+PARALLEL_PLAN = """BEGIN_PLAN
+{"summary": "Three steps, two at once.", "tasks": [
+ {"title": "Stats engine", "builder": "codex", "after": []},
+ {"title": "Docs page", "builder": "gemini", "after": []},
+ {"title": "Stats on the dashboard", "builder": "claude", "after": [1]}]}
 END_PLAN
 """
 

@@ -9,6 +9,9 @@ the agent list in hub/agents.yaml.
     HUB_AGENT_TIMEOUT   minutes one agent run may take (45)
     HUB_REVIEW_TIMEOUT  minutes to wait for CI after a review (40)
     HUB_AGENTS_FILE     extra/changed agents, server only (default $HUB_DATA/agents.yaml)
+    HUB_MAX_PARALLEL    agent runs at the same time, at most one per agent (2; the page can change it)
+    HUB_MIN_FREE_MB     don't start an extra run with less free memory than this (1500)
+    HUB_MAX_LOAD        ...or with a CPU load above this per core (0.8)
     HUB_CMD_<AGENT>     optional JSON list replacing one agent's command
     TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID   optional phone notifications
     CLAUDE_CODE_OAUTH_TOKEN                 Claude's login (claude setup-token)
@@ -105,6 +108,13 @@ def _int(name: str, default: int) -> int:
         return default
 
 
+def _float(name: str, default: float) -> float:
+    try:
+        return max(0.1, float(os.getenv(name, "").strip() or default))
+    except ValueError:
+        return default
+
+
 @dataclass(frozen=True)
 class Config:
     repo: str = ""
@@ -117,6 +127,9 @@ class Config:
     review_timeout: int = 40 * 60
     deploy_timeout: int = 90 * 60
     poll_seconds: int = 20
+    max_parallel: int = 2
+    min_free_mb: int = 1500
+    max_load: float = 0.8
     telegram_token: str = ""
     telegram_chat: str = ""
     agents: dict = field(default_factory=load_agents)
@@ -159,5 +172,8 @@ def load() -> Config:
         review_timeout=_int("HUB_REVIEW_TIMEOUT", 40) * 60,
         telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
         telegram_chat=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
+        max_parallel=min(_int("HUB_MAX_PARALLEL", 2), 3),
+        min_free_mb=_int("HUB_MIN_FREE_MB", 1500),
+        max_load=_float("HUB_MAX_LOAD", 0.8),
         agents=load_agents(extra),
     )

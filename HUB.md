@@ -15,7 +15,7 @@ PR is ready to merge.
 **manager** and the **reviewer**. The manager reads the code and proposes a
 plan of 1–6 small tasks, each with the builder it thinks fits (and why). You
 can change any task's builder or reviewer, then:
-- **Approve & start** → the tasks run one after another; each starts when the
+- **Approve** → the tasks run one after another; each starts when the
   one before it is merged (so later steps build on earlier ones)
 - **Ask for changes** → write what to change; the manager makes a new plan
 - **Reject**
@@ -85,7 +85,29 @@ login could otherwise run any command on your server.
    note, then **Continue** (optionally with instructions for the builder) or
    **Cancel**. If you push to the branch yourself, the reviewer looks again.
 
-The hub **never merges by itself**. One agent runs at a time.
+The hub merges by itself only if you tick **Merge and deploy by itself** (see below).
+
+## Speed: work at the same time
+
+- **Different agents work at once**, one task each (each on its own subscription). Set the
+  limit in **Agents → Work at the same time** (1, 2 or 3; default 2).
+- An **extra** run only starts if the server has room: CPU load under 80% per core and at
+  least 1.5 GB of free memory (`HUB_MAX_LOAD`, `HUB_MIN_FREE_MB` in `hub.env`). The first
+  run always starts. This keeps the league safe.
+- **Plans run steps in parallel** when they don't depend on each other. The manager says
+  which steps need which (you see "Starts right away" or "Starts after step 1" on each
+  step before you approve). A step starts as soon as the steps it needs are merged.
+- If two parallel PRs touch the same lines, the second one gets a conflict; the hub sends
+  it back to its builder to merge `main` and fix it.
+- Builders run the tests for what they changed; the hub runs the full suite once; the
+  reviewer reads the code and leaves the full suite to CI.
+
+## Merge by itself (optional)
+
+Tick **Merge and deploy by itself** when you start a task or a plan. When the review is ✅
+and CI is green, the hub merges and the deploy starts, and you get a Telegram message.
+It never does this for changes to deploy, login, Docker, requirements, risk-limit or
+agent-prompt files, or the hub itself: those wait for you. Off by default.
 
 ## Safety
 

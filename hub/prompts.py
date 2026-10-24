@@ -5,15 +5,14 @@ import json
 
 from .review import MAX_PLAN_TASKS
 
-CHECKS = """  ruff check --select F arena hub
-  env -u CODEX_HOME python -m pytest -q -p no:cacheprovider arena/tests hub/tests"""
-
-COMMON = f"""Rules for this run:
+COMMON = """Rules for this run:
 - Work only in this folder. Do NOT push, open PRs, or change git remotes or branches:
   the Agent Hub does that after you finish.
 - Never read, print or create .env files, keys, tokens or anything under data/.
-- Before you finish, run the same checks as CI and make sure both pass:
-{CHECKS}
+- Before you finish, run ruff and the tests for the code you changed, for example:
+  ruff check --select F arena hub
+  env -u CODEX_HOME python -m pytest -q -p no:cacheprovider arena/tests/test_<area>.py
+  (The hub runs the full test suite after you, so you don't have to.)
 - You may commit. Anything left uncommitted is committed for you.
 - End with a short summary in plain, simple English: what you changed, how you
   tested it, and anything Joe must do on the VPS after merging (or "nothing").
@@ -50,6 +49,12 @@ why in your final summary instead.
 
 {COMMON}
 """
+
+
+CONFLICT = """CONFLICT WITH MAIN: other work was merged into main while you worked, and your
+branch now conflicts with it. Run `git merge origin/main` (origin/main is already fetched),
+resolve every conflict keeping both changes working, commit, then run ruff and the tests
+for the files involved. Don't drop the other work."""
 
 
 def checks_failed(output_tail: str) -> str:
@@ -102,8 +107,8 @@ The change was built by {builder_label} for this task (GitHub issue #{task['issu
 Done when: {task['done_when'].strip() or 'the task above works, with tests'}
 
 See the change with:  git diff origin/{base}...HEAD
-You may run the CI checks:
-{CHECKS}
+Don't run the full test suite: CI runs it on GitHub, and the PR is only marked ready when
+CI passes. Read the code; run a single test file only if you need to check something.
 
 Review it against AGENTS.md (especially "Hard rules" and "Code Review Rules") and the
 "Done when" above.
@@ -133,9 +138,13 @@ Joe's request:
 {request.strip()}
 {redo}
 Turn it into a plan of 1 to {MAX_PLAN_TASKS} small tasks. Each task becomes one pull request (keep them
-small, see AGENTS.md). They are built one after another, in your order, and each task starts
-from `main` after the one before it is merged, so later tasks can build on earlier ones.
-For each task pick the builder you think fits best: {builders}.
+small, see AGENTS.md). Each task starts from `main`.
+Tasks can run AT THE SAME TIME to save time. For each task, list in "after" the step numbers
+(1, 2, ...) that must be merged before it starts: a step that uses code from an earlier step
+must wait for it. Give an empty list only to steps that are truly independent AND change
+different files (two parallel steps editing the same file would conflict).
+For each task pick the builder you think fits best: {builders}. Different builders can work
+at the same time; steps for the same builder run one after another.
 Write titles, details and "done when" in plain simple English, specific enough that the
 builder needs nothing else: name the files and functions to change when you know them.
 
@@ -143,6 +152,9 @@ End your answer with the plan as JSON between a line BEGIN_PLAN and a line END_P
 
 BEGIN_PLAN
 {{"summary": "one or two sentences for Joe",
-  "tasks": [{{"title": "...", "details": "...", "done_when": "...", "builder": "codex", "why": "why this builder"}}]}}
+  "tasks": [{{"title": "...", "details": "...", "done_when": "...", "builder": "codex", "why": "why this builder",
+             "after": []}},
+            {{"title": "...", "details": "...", "done_when": "...", "builder": "claude", "why": "...",
+             "after": [1]}}]}}
 END_PLAN
 """
