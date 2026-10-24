@@ -83,6 +83,7 @@ Make results meaningful before making agents smarter.
 
 - [ ] **3.1 Admin panel (mobile-friendly, password + 2FA).** Pause/resume agents (kill switch), force a review, edit risk limits, view logs, alerts and health, trigger a backup.
   > Status API done (#28): private GET-only service, heartbeat, schedule, agent and broker evidence with overall health and read-only Git version.
+  > Machine stats and error logs done (#31): CPU/RAM/data-volume/DB size, usage warnings, and bounded, masked warning/error logs filtered by service. The rest of 3.1 remains open.
   > Database API done (#23): private GET-only table browsing, search, records and masked CSV exports through a read-only SQLite connection. Database browser UI done (#27): shortcuts, table list with row counts, paging, sorting, debounced search, pretty JSON record panel, and CSV export in `/admin#database`. The rest of 3.1 remains open.
 - [ ] **3.2 Live updates.** WebSockets (or SSE) so positions, P&L and agent activity update without refresh.
 - [ ] **3.3 Agent thought feed.** Live timeline of what each agent is analyzing, deciding and why (from the journal and debates).

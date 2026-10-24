@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import Config
-from . import db, status
+from . import db, logs, status
 from .masking import mask_record
 
 STATIC = Path(__file__).parent / "static"
@@ -33,6 +33,14 @@ def create_app(cfg: Config | None = None) -> FastAPI:
     @app.get("/admin/api/status")
     def operational_status():
         return JSONResponse(status.collect(cfg), headers=NO_STORE)
+
+    @app.get("/admin/api/logs")
+    def error_logs(service: str = 'all', limit: int = Query(50, ge=1)):
+        if service not in logs.SERVICES:
+            return JSONResponse({'error': 'Unknown service',
+                                 'allowed_services': list(logs.SERVICES)},
+                                status_code=400, headers=NO_STORE)
+        return JSONResponse(logs.collect(cfg, service=service, limit=limit), headers=NO_STORE)
 
     @app.get("/admin/api/ping")
     def ping():

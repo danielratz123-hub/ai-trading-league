@@ -2,6 +2,17 @@
 from __future__ import annotations
 
 import json
+import re
+
+
+def mask_text(value: str) -> str:
+    """Redact credentials embedded in unstructured log messages."""
+    value = re.sub(r'(?i)\bBearer\s+[^\s,;\'"<>]+', 'Bearer ••••', value)
+    value = re.sub(
+        r'''(?ix)(\b[\w-]*(?:key|token|secret|password|passwd|credential)[\w-]*["']?\s*[=:]\s*)
+        (?:"[^"\n]*"|'[^'\n]*'|[^\s,;&]+)''', r'\1••••', value)
+    return re.sub(r'(?<![\w-])(?:sk-[\w.-]+|[A-Za-z0-9_+/=.-]{32,})(?![\w-])',
+                  '••••', value)
 
 
 def is_secret_column(name: str) -> bool:
