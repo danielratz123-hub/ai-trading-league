@@ -1,0 +1,56 @@
+# Agent Hub: the agents it can run. Each one is the official CLI of an AI coding
+# agent, run headless in the hub container and signed in with your own
+# subscription. See HUB.md "Add an agent".
+#
+# To add an agent:
+#   1. install its CLI in Dockerfile.hub (one RUN line)
+#   2. add an entry here (or, server-only, in /hub/data/agents.yaml)
+#   3. sign it in once inside the container, then "Test agents" on the page
+#
+# Fields:
+#   label        name on the page
+#   color        its color on the page
+#   cmd          the command; "{prompt}" is the task, "{options}" is where the
+#                model/effort flags go (at the end if there's no "{options}")
+#   model_args   how to pass a model; "{model}" is replaced
+#   effort_args  how to pass an effort level; "{effort}" is replaced
+#   efforts      effort levels the CLI accepts
+#   models       model names offered on the page (you can also type any name)
+#   list_models  optional: a command that prints the models it can use
+#   version      a command that prints its version (used by "Test agents")
+#   env_keys     settings from hub.env that this agent (and only this agent) gets
+
+claude:
+  label: Claude
+  color: "#E8875F"
+  cmd: [claude, -p, "{prompt}", --dangerously-skip-permissions]
+  model_args: [--model, "{model}"]
+  effort_args: [--effort, "{effort}"]
+  efforts: [low, medium, high, xhigh, max]
+  models: [opus, sonnet, haiku, fable]
+  version: [claude, --version]
+  env_keys: [CLAUDE_CODE_OAUTH_TOKEN]
+
+codex:
+  label: Codex
+  color: "#4C8DF6"
+  cmd: [codex, exec, --dangerously-bypass-approvals-and-sandbox, --skip-git-repo-check, "{options}", "{prompt}"]
+  model_args: [-m, "{model}"]
+  effort_args: [-c, "model_reasoning_effort={effort}"]
+  efforts: [low, medium, high]
+  models: []
+  version: [codex, --version]
+
+gemini:
+  label: Gemini
+  color: "#9B8CFF"
+  # Google's Antigravity CLI (Gemini CLI no longer signs in with a personal
+  # subscription). GEMINI_API_KEY only if you use a key instead (HUB.md).
+  cmd: [agy, -p, "{prompt}", --dangerously-skip-permissions]
+  model_args: [--model, "{model}"]
+  effort_args: [--effort, "{effort}"]
+  efforts: [low, medium, high]
+  models: []
+  list_models: [agy, models]
+  version: [agy, --version]
+  env_keys: [GEMINI_API_KEY]

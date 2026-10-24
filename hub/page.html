@@ -4,212 +4,290 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#000000">
 <title>Agent Hub</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root {
   color-scheme: dark;
-  --bg: #000; --card: #0D0D0F; --card-2: #141417; --line: rgba(255,255,255,.08);
-  --ink: #F5F5F7; --ink-2: #D2D2D7; --muted: #A1A1A6; --faint: #6E6E73;
-  --brand: #FF7A1A; --brand-ink: #000;
-  --claude: #E8875F; --codex: #4C8DF6; --gemini: #9B8CFF;
-  --ok: #4CC38A; --bad: #F2707A; --warn: #F5C46B; --run: #7AB4FF;
-  --ease: cubic-bezier(.28,0,.22,1);
+  --black: #000;
+  --raise: #121212;
+  --raise-2: #1B1B1B;
+  --line: rgba(255,255,255,.09);
+  --line-2: rgba(255,255,255,.16);
+  --white: #F7F7F5;
+  --soft: #C9C9C4;
+  --steel: #8C8C88;
+  --orange: #FF7A1A;
+  --orange-ink: #1A0B00;
+  --ready: #3DD68C;
+  --stop: #FF5D5D;
+  --wait: #F2C14E;
+  --ease: cubic-bezier(.2,.7,.2,1);
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-body { margin: 0; background: var(--bg); color: var(--ink);
-  font: 15px/1.5 "Geist", system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
-.m { font-family: "Geist Mono", ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums; }
-a { color: #7AB4FF; } a:hover { color: #A9CEFF; }
-:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
-.wrap { max-width: 1120px; margin: 0 auto; padding: 0 16px 64px; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--black); color: var(--white);
+  font: 400 15px/1.5 "Archivo", system-ui, sans-serif; font-variation-settings: "wdth" 100;
+  -webkit-font-smoothing: antialiased; font-variant-numeric: tabular-nums; }
+a { color: var(--white); text-decoration-color: var(--orange); text-underline-offset: 3px; }
+a:hover { color: var(--orange); }
+:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+button, input, textarea, select { font: inherit; color: inherit; }
+.wrap { max-width: 1200px; margin: 0 auto; padding: 0 16px 80px; }
+.wide { font-variation-settings: "wdth" 125; letter-spacing: -.01em; }
+.mono { font-family: "JetBrains Mono", ui-monospace, Consolas, monospace; font-size: 12px; }
+.steel { color: var(--steel); }
+.dot { width: 9px; height: 9px; border-radius: 50%; flex: none; display: inline-block; background: var(--steel); }
 
-header { display: flex; align-items: center; gap: 12px; padding: 22px 0 18px; flex-wrap: wrap; }
-.mono { width: 34px; height: 34px; border-radius: 10px; background: var(--brand); color: var(--brand-ink);
-  display: grid; place-items: center; font-weight: 700; letter-spacing: -.5px; }
-h1 { font-size: 22px; margin: 0; letter-spacing: -.3px; }
-.repo { color: var(--faint); font-size: 13px; }
-.spacer { flex: 1; }
-.agents { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px;
-  border: 1px solid var(--line); font-size: 12px; color: var(--ink-2); white-space: nowrap; }
-.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
-
-.grid { display: grid; grid-template-columns: 380px 1fr; gap: 16px; align-items: start; }
-@media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
-.card { background: var(--card); border: 1px solid var(--line); border-radius: 22px; padding: 18px; }
-.card h2 { font-size: 15px; margin: 0 0 12px; font-weight: 600; }
-label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 6px; }
-input, textarea { width: 100%; background: var(--card-2); color: var(--ink); border: 1px solid var(--line);
-  border-radius: 14px; padding: 10px 12px; font: inherit; }
-textarea { min-height: 96px; resize: vertical; }
-input:focus, textarea:focus { border-color: rgba(255,122,26,.6); outline: none; }
-
-.seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
-.seg button { padding: 10px 6px; border-radius: 14px; border: 1px solid var(--line); background: var(--card-2);
-  color: var(--ink-2); font: inherit; font-size: 13px; cursor: pointer; display: flex; gap: 6px;
-  align-items: center; justify-content: center; transition: border-color 200ms, background 200ms; }
-.seg button[aria-pressed="true"] { border-color: var(--brand); background: rgba(255,122,26,.1); color: var(--ink); }
-
-.btn { border: 1px solid var(--line); background: var(--card-2); color: var(--ink); border-radius: 999px;
-  padding: 9px 16px; font: inherit; font-size: 14px; font-weight: 500; cursor: pointer;
-  transition: transform 150ms var(--ease), opacity 150ms; }
-.btn:hover { border-color: rgba(255,255,255,.2); }
+/* ------------------------------------------------------------- header */
+header { display: flex; align-items: center; gap: 14px; padding: 22px 0 20px; flex-wrap: wrap; }
+.mark { width: 40px; height: 40px; border-radius: 11px; background: var(--orange); color: var(--orange-ink);
+  display: grid; place-items: center; font-weight: 800; font-size: 17px; letter-spacing: -.5px; }
+h1 { margin: 0; font-size: 26px; line-height: 1.05; font-weight: 800; }
+.repo { color: var(--steel); font-size: 13px; }
+.grow { flex: 1; }
+.crew { display: flex; gap: 6px; flex-wrap: wrap; }
+.member { display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px 6px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--raise); font-size: 13px; cursor: pointer; }
+.member:hover { border-color: var(--line-2); }
+.member .n { color: var(--steel); }
+.member.off { opacity: .45; }
+.btn { border: 1px solid var(--line-2); background: var(--raise-2); color: var(--white); border-radius: 999px;
+  padding: 9px 16px; font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap;
+  transition: transform 120ms var(--ease), background 160ms; }
+.btn:hover { background: #242424; }
 .btn:active { transform: scale(.97); }
-.btn:disabled { opacity: .45; cursor: default; }
-.btn.primary { background: var(--brand); color: var(--brand-ink); border-color: var(--brand); font-weight: 600; }
-.btn.good { background: var(--ok); color: #000; border-color: var(--ok); font-weight: 600; }
-.btn.ghost { background: transparent; }
-.btn.small { padding: 6px 12px; font-size: 13px; }
-.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.mt { margin-top: 14px; }
-.msg { font-size: 13px; margin-top: 10px; min-height: 1em; }
-.msg.err { color: var(--bad); } .msg.ok { color: var(--ok); }
+.btn:disabled { opacity: .4; cursor: default; transform: none; }
+.btn.go { background: var(--orange); border-color: var(--orange); color: var(--orange-ink); }
+.btn.go:hover { background: #FF8B38; }
+.btn.ok { background: var(--ready); border-color: var(--ready); color: #002614; }
+.btn.quiet { background: transparent; }
+.btn.sm { padding: 6px 12px; font-size: 13px; }
 
-.banner { border: 1px solid rgba(245,196,107,.35); color: var(--warn); border-radius: 16px; padding: 12px 14px;
-  font-size: 14px; margin-bottom: 16px; }
+.notice { border-radius: 14px; padding: 12px 14px; font-size: 14px; margin-bottom: 14px; }
+.notice.warn { border: 1px solid rgba(242,193,78,.4); color: var(--wait); }
+.notice.bad { border: 1px solid rgba(255,93,93,.35); color: #FF9A9A; word-break: break-word; }
 
-.tasks { display: grid; gap: 8px; }
-.task { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; padding: 12px 14px;
-  border-radius: 16px; border: 1px solid var(--line); background: var(--card-2); cursor: pointer; text-align: left;
-  color: inherit; font: inherit; width: 100%; transition: border-color 200ms; }
-.task:hover, .task[aria-current="true"] { border-color: rgba(255,122,26,.5); }
-.task .t { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task .sub { font-size: 12px; color: var(--faint); }
-.status { font-size: 12px; padding: 3px 10px; border-radius: 999px; white-space: nowrap; border: 1px solid currentColor; }
-.s-queued { color: var(--muted); } .s-building, .s-fixing { color: var(--run); }
-.s-reviewing { color: var(--warn); } .s-ready { color: var(--ok); } .s-merged { color: var(--faint); }
-.s-needs_joe, .s-failed { color: var(--bad); } .s-cancelled { color: var(--faint); }
-.pulse { animation: pulse 1.6s ease-in-out infinite; }
-@keyframes pulse { 50% { opacity: .45; } }
-.empty { color: var(--faint); font-size: 14px; padding: 18px 4px; }
+/* ------------------------------------------------------------- now running */
+.now { position: relative; border-radius: 20px; background: var(--raise); border: 1px solid var(--line);
+  padding: 16px 18px 16px 24px; margin-bottom: 18px; overflow: hidden; }
+.now::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: var(--agent, var(--orange)); }
+.now-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.now-head strong { font-size: 18px; }
+.now-head .what { color: var(--soft); }
+.live { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--agent, var(--orange)); font-weight: 600; }
+.live .dot { background: var(--agent, var(--orange)); animation: beat 1.4s ease-in-out infinite; }
+@keyframes beat { 50% { opacity: .25; transform: scale(.8); } }
+.now pre { margin: 12px 0 0; max-height: 168px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  color: var(--soft); background: var(--black); border-radius: 12px; padding: 12px; border: 1px solid var(--line); }
 
-.detail { margin-top: 16px; }
-.detail h3 { margin: 0; font-size: 18px; }
-.meta { color: var(--muted); font-size: 13px; margin-top: 4px; display: flex; gap: 10px; flex-wrap: wrap; }
-.note { margin-top: 12px; padding: 10px 12px; border-radius: 14px; background: rgba(242,112,122,.08);
-  border: 1px solid rgba(242,112,122,.3); font-size: 14px; }
-.timeline { margin: 14px 0 0; padding: 0; list-style: none; display: grid; gap: 10px; }
-.timeline li { display: grid; grid-template-columns: 64px 1fr; gap: 10px; font-size: 13px; }
-.timeline .when { color: var(--faint); }
-.timeline pre, .log { white-space: pre-wrap; word-break: break-word; margin: 6px 0 0; background: #050506;
-  border: 1px solid var(--line); border-radius: 12px; padding: 10px; font-size: 12px; max-height: 260px; overflow: auto;
-  color: var(--ink-2); }
-details summary { cursor: pointer; color: var(--muted); font-size: 13px; margin-top: 14px; }
-.log { max-height: 420px; }
-.tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: 999px;
-  background: var(--card-2); border: 1px solid var(--line); margin-bottom: 4px; }
-.tabs button { border: 0; border-radius: 999px; padding: 8px 6px; background: transparent; color: var(--muted);
-  font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; transition: background 200ms, color 200ms; }
-.tabs button[aria-selected="true"] { background: var(--ink); color: #000; }
-.hint { color: var(--faint); }
-.warn { margin-top: 8px; font-size: 12px; color: var(--warn); }
-.stack { display: grid; gap: 16px; }
-.agenterr { margin: -6px 0 16px; display: grid; gap: 6px; font-size: 13px; color: var(--bad); }
-.agenterr div { border: 1px solid rgba(242,112,122,.3); border-radius: 12px; padding: 8px 12px; word-break: break-word; }
-.ptask { border: 1px solid var(--line); border-radius: 16px; padding: 12px; margin-top: 10px; background: var(--card-2); }
-.ptask .t { font-weight: 600; }
-.ptask .d { color: var(--ink-2); font-size: 13px; margin-top: 4px; white-space: pre-wrap; }
-.ptask .why { color: var(--faint); font-size: 12px; margin-top: 4px; }
-.ptask select { background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 10px;
-  padding: 5px 8px; font: inherit; font-size: 13px; }
-.pair { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
-.s-waiting, .s-planning, .s-managing, .s-proposed, .s-approved, .s-done, .s-rejected { color: var(--muted); }
-.s-managing { color: var(--run); } .s-proposed { color: var(--warn); } .s-approved { color: var(--run); }
-.s-done { color: var(--ok); }
+/* ------------------------------------------------------------- layout */
+.grid { display: grid; grid-template-columns: 390px 1fr; gap: 18px; align-items: start; }
+@media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+.panel { background: var(--raise); border: 1px solid var(--line); border-radius: 20px; padding: 18px; }
+.panel h2 { margin: 0 0 14px; font-size: 18px; font-weight: 700; }
+label.f { display: block; font-size: 13px; color: var(--soft); margin: 14px 0 6px; font-weight: 500; }
+.hint { color: var(--steel); font-weight: 400; }
+input[type=text], textarea, select { width: 100%; background: var(--black); border: 1px solid var(--line-2);
+  border-radius: 12px; padding: 10px 12px; font-size: 15px; }
+textarea { min-height: 92px; resize: vertical; line-height: 1.45; }
+input:focus, textarea:focus, select:focus { border-color: var(--orange); outline: none; }
+select { appearance: none; padding-right: 32px; cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--steel) 50%), linear-gradient(135deg, var(--steel) 50%, transparent 50%);
+  background-position: calc(100% - 17px) 55%, calc(100% - 12px) 55%; background-size: 5px 5px; background-repeat: no-repeat; }
+
+.switch { display: grid; grid-template-columns: 1fr 1fr; padding: 4px; border-radius: 999px; background: var(--black);
+  border: 1px solid var(--line); }
+.switch button { border: 0; background: transparent; border-radius: 999px; padding: 9px 8px; cursor: pointer;
+  color: var(--steel); font-weight: 600; font-size: 14px; }
+.switch button[aria-selected="true"] { background: var(--white); color: var(--black); }
+
+.who { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 6px; }
+.who button { display: flex; align-items: center; justify-content: center; gap: 7px; padding: 10px 8px;
+  border-radius: 12px; border: 1px solid var(--line); background: var(--black); cursor: pointer; font-weight: 600; font-size: 14px; }
+.who button[aria-pressed="true"] { border-color: var(--c, var(--orange)); box-shadow: inset 0 0 0 1px var(--c, var(--orange)); }
+.model-row { display: flex; gap: 6px; margin-top: 6px; }
+.model-row select, .model-row input { font-size: 13px; padding: 7px 10px; border-radius: 10px; }
+.model-row input { flex: 1; }
+.selfwarn { margin-top: 8px; font-size: 13px; color: var(--wait); }
+.formmsg { margin-top: 10px; font-size: 14px; min-height: 1em; }
+.formmsg.err { color: #FF9A9A; } .formmsg.ok { color: var(--ready); }
+
+/* ------------------------------------------------------------- board */
+.board { display: grid; gap: 22px; }
+.group h2 { display: flex; align-items: baseline; gap: 10px; margin: 0 0 10px; font-size: 20px; font-weight: 800; }
+.group h2 .count { font-size: 15px; color: var(--steel); font-weight: 500; }
+.group.needs h2 { color: #FF9A9A; }
+.group.ready h2 { color: var(--ready); }
+.empty { color: var(--steel); font-size: 14px; padding: 4px 0; }
+.list { display: grid; gap: 8px; }
+
+.card { background: var(--raise); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+.card[aria-expanded="true"] { border-color: var(--line-2); }
+.card > button.head { all: unset; box-sizing: border-box; display: grid; grid-template-columns: 1fr auto; gap: 6px 14px;
+  width: 100%; padding: 14px 16px; cursor: pointer; }
+.card > button.head:focus-visible { outline: 2px solid var(--orange); outline-offset: -2px; border-radius: 16px; }
+.title { font-weight: 600; font-size: 16px; line-height: 1.3; min-width: 0; overflow-wrap: anywhere; }
+.crewline { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; color: var(--soft); }
+.who-tag { display: inline-flex; align-items: center; gap: 6px; }
+.arrow { color: var(--steel); }
+.state { font-size: 13px; font-weight: 600; white-space: nowrap; align-self: start; }
+.state.needs { color: #FF9A9A; } .state.ready { color: var(--ready); } .state.work { color: var(--soft); }
+.state.done { color: var(--steel); }
+
+/* the rail: a task's real sequence */
+.rail { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; margin-top: 4px; }
+.stop { display: grid; gap: 5px; font-size: 11px; color: var(--steel); }
+.stop i { display: block; height: 4px; border-radius: 4px; background: var(--raise-2); }
+.stop.done i { background: var(--orange); }
+.stop.done { color: var(--soft); }
+.stop.here i { background: linear-gradient(90deg, var(--orange) 0 50%, var(--raise-2) 50%); background-size: 200% 100%;
+  animation: run 1.6s linear infinite; }
+.stop.here { color: var(--white); font-weight: 600; }
+.stop.stuck i { background: var(--stop); } .stop.stuck { color: #FF9A9A; font-weight: 600; }
+.stop.live i { background: var(--ready); } .stop.live { color: var(--ready); font-weight: 600; }
+@keyframes run { from { background-position: 100% 0; } to { background-position: 0 0; } }
+
+.body { border-top: 1px solid var(--line); padding: 14px 16px 16px; }
+.links { display: flex; gap: 14px; flex-wrap: wrap; font-size: 14px; }
+.note { margin-top: 12px; padding: 10px 12px; border-radius: 12px; background: rgba(255,93,93,.08);
+  border: 1px solid rgba(255,93,93,.28); font-size: 14px; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.body textarea { margin-top: 12px; min-height: 64px; }
+.msg { font-size: 13px; margin-top: 8px; min-height: 1em; }
+.msg.err { color: #FF9A9A; } .msg.ok { color: var(--ready); }
+.timeline { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 10px; }
+.timeline li { display: grid; grid-template-columns: 56px 1fr; gap: 10px; font-size: 14px; }
+.timeline .when { color: var(--steel); font-size: 13px; }
+.timeline strong { font-weight: 600; }
+pre.box { white-space: pre-wrap; word-break: break-word; margin: 6px 0 0; background: var(--black); border: 1px solid var(--line);
+  border-radius: 10px; padding: 10px; max-height: 280px; overflow: auto; color: var(--soft); }
+details summary { cursor: pointer; color: var(--soft); font-size: 14px; margin-top: 14px; }
+.deploy { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; border: 1px solid currentColor; }
+.deploy.pending { color: var(--wait); } .deploy.success { color: var(--ready); } .deploy.failure { color: var(--stop); }
+
+.ptask { border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; margin-top: 10px; background: var(--black); }
+.ptask .t { font-weight: 700; }
+.ptask .d { color: var(--soft); font-size: 14px; margin-top: 4px; white-space: pre-wrap; }
+.ptask .why { color: var(--steel); font-size: 13px; margin-top: 6px; }
+.pair { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; font-size: 13px; color: var(--soft); }
+.pair select { width: auto; font-size: 13px; padding: 6px 30px 6px 10px; }
+
+/* ------------------------------------------------------------- agents sheet */
+dialog { border: 0; padding: 0; background: transparent; color: var(--white); max-width: 560px; width: calc(100% - 24px); }
+dialog::backdrop { background: rgba(0,0,0,.72); }
+.sheet { background: var(--raise); border: 1px solid var(--line-2); border-radius: 22px; padding: 20px; max-height: 86vh; overflow: auto; }
+.sheet-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.sheet-head h2 { margin: 0; font-size: 22px; font-weight: 800; flex: 1; }
+.agent { border: 1px solid var(--line); border-radius: 16px; padding: 14px; margin-top: 12px; background: var(--black); }
+.agent-top { display: flex; align-items: center; gap: 10px; }
+.agent-top strong { font-size: 17px; flex: 1; }
+.agent-status { font-size: 13px; color: var(--steel); margin-top: 4px; overflow-wrap: anywhere; }
+.agent-status.ok { color: var(--ready); } .agent-status.bad { color: #FF9A9A; }
+.toggle { position: relative; width: 46px; height: 26px; border-radius: 999px; border: 1px solid var(--line-2);
+  background: var(--raise-2); cursor: pointer; flex: none; padding: 0; }
+.toggle::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--steel); transition: transform 180ms var(--ease), background 180ms; }
+.toggle[aria-checked="true"] { background: var(--orange); border-color: var(--orange); }
+.toggle[aria-checked="true"]::after { transform: translateX(20px); background: var(--orange-ink); }
+.efforts { display: flex; gap: 4px; flex-wrap: wrap; }
+.efforts button { border: 1px solid var(--line); background: transparent; border-radius: 999px; padding: 5px 11px;
+  font-size: 13px; cursor: pointer; color: var(--soft); }
+.efforts button[aria-pressed="true"] { background: var(--white); color: var(--black); border-color: var(--white); }
+.saved { font-size: 12px; color: var(--ready); margin-left: 6px; }
+.howto { font-size: 13px; color: var(--steel); margin-top: 16px; line-height: 1.55; }
+.howto code { color: var(--soft); }
+
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <div class="mono" aria-hidden="true">ds</div>
+    <div class="mark wide" aria-hidden="true">ds</div>
     <div>
-      <h1>Agent Hub</h1>
-      <div class="repo m" id="repo"></div>
+      <h1 class="wide">Agent Hub</h1>
+      <div class="repo" id="repo"></div>
     </div>
-    <div class="spacer"></div>
-    <div class="agents" id="agents"></div>
-    <button class="btn small ghost" id="test" title="Checks each subscription is signed in (uses a tiny bit of each plan)">Test agents</button>
+    <div class="grow"></div>
+    <div class="crew" id="crew" aria-label="Agents"></div>
+    <button class="btn sm quiet" id="test" title="Checks each agent is signed in. Uses a tiny bit of each plan.">Test agents</button>
+    <button class="btn sm" id="open-agents">Agents</button>
   </header>
 
-  <div class="agenterr" id="agenterr" hidden></div>
+  <div class="notice warn" id="setup" hidden>The hub isn't set up yet: add <code>HUB_REPO</code> and
+    <code>HUB_GITHUB_TOKEN</code> to <code>hub.env</code> on the server (HUB.md, step 3).</div>
+  <div id="agenterr"></div>
 
-  <div class="banner" id="setup" hidden>The hub isn't set up yet: <span class="m">HUB_REPO</span> and
-    <span class="m">HUB_GITHUB_TOKEN</span> are missing in <span class="m">hub.env</span>. See HUB.md.</div>
+  <section class="now" id="now" hidden aria-live="polite"></section>
 
   <div class="grid">
-    <form class="card" id="new" autocomplete="off">
-      <div class="tabs" role="tablist">
+    <form class="panel" id="new" autocomplete="off">
+      <div class="switch" role="tablist" aria-label="What to start">
         <button type="button" role="tab" id="m-task" aria-selected="true">One task</button>
         <button type="button" role="tab" id="m-plan" aria-selected="false">Plan with a manager</button>
       </div>
 
+      <div id="role-builder"></div>
+      <div id="role-manager" hidden></div>
+      <div id="role-reviewer"></div>
+      <div class="selfwarn" id="selfwarn" hidden>The builder would review its own work. Another agent gives a real second opinion.</div>
+
       <div id="f-task">
-        <label>Builder</label>
-        <div class="seg" data-pick="builder" role="group" aria-label="Builder"></div>
+        <label class="f" for="title">Task</label>
+        <input type="text" id="title" maxlength="200" placeholder="Add an SPY buy-and-hold player">
+        <label class="f" for="body">Details <span class="hint">files, roadmap item, anything the agent should know</span></label>
+        <textarea id="body"></textarea>
+        <label class="f" for="done">Done when</label>
+        <textarea id="done" style="min-height:64px" placeholder="SPY shows on the scoreboard, with tests"></textarea>
       </div>
       <div id="f-plan" hidden>
-        <label>Manager <span class="hint">splits your request into tasks and picks builders</span></label>
-        <div class="seg" data-pick="manager" role="group" aria-label="Manager"></div>
+        <label class="f" for="request">What do you want? <span class="hint">the manager splits it into tasks</span></label>
+        <textarea id="request" style="min-height:150px" placeholder="Do ROADMAP item 1.2: Sharpe, Sortino and max drawdown per agent and per strategy, shown on the dashboard"></textarea>
       </div>
-      <label>Reviewer</label>
-      <div class="seg" data-pick="reviewer" role="group" aria-label="Reviewer"></div>
-      <div class="warn" id="selfwarn" hidden>The builder reviews its own work. A different reviewer is a safer second opinion.</div>
-
-      <div id="f-task2">
-        <label for="title">Task</label>
-        <input id="title" maxlength="200" placeholder="e.g. Add an SPY buy-and-hold player">
-        <label for="body">Details</label>
-        <textarea id="body" placeholder="What it should do, files to look at, roadmap item…"></textarea>
-        <label for="done">Done when</label>
-        <textarea id="done" style="min-height:64px" placeholder="How we know it works"></textarea>
-      </div>
-      <div id="f-plan2" hidden>
-        <label for="request">What do you want?</label>
-        <textarea id="request" style="min-height:150px" placeholder="e.g. Add an SPY buy-and-hold benchmark player, score it like the agents, and show it on the scoreboard"></textarea>
-      </div>
-      <div class="row mt"><button class="btn primary" id="start" type="submit">Start</button></div>
-      <div class="msg" id="newmsg" role="status"></div>
+      <div class="actions"><button class="btn go" id="start" type="submit">Start the task</button></div>
+      <div class="formmsg" id="newmsg" role="status"></div>
     </form>
 
-    <div class="stack">
-      <section class="card" id="plans-card" hidden>
-        <h2>Plans</h2>
-        <div class="tasks" id="plans"></div>
-        <div class="detail" id="pdetail" hidden></div>
-      </section>
-      <section class="card">
-        <h2>Tasks</h2>
-        <div class="tasks" id="tasks"></div>
-        <div class="detail" id="detail" hidden></div>
-      </section>
-    </div>
+    <div class="board" id="board"></div>
   </div>
 </div>
+
+<dialog id="agents-sheet" aria-labelledby="agents-title">
+  <div class="sheet">
+    <div class="sheet-head">
+      <h2 class="wide" id="agents-title">Agents</h2>
+      <button class="btn sm quiet" id="close-agents">Close</button>
+    </div>
+    <div class="steel" style="font-size:14px">Each agent's default model and effort. A task can still pick its own model.</div>
+    <div id="agent-cards"></div>
+    <div class="howto">To add another agent, install its CLI in <code>Dockerfile.hub</code> and add it to
+      <code>hub/agents.yaml</code>, then sign it in once on the server. HUB.md, "Add an agent", has the steps.</div>
+  </div>
+</dialog>
 
 <script>
 const $ = (s, el = document) => el.querySelector(s);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
-const LABEL = { waiting: "Waiting for previous step", queued: "Queued", building: "Building", fixing: "Fixing",
-  reviewing: "In review", ready: "Ready to merge", needs_joe: "Needs you", failed: "Failed", merged: "Merged",
-  cancelled: "Cancelled", planning: "Planning", managing: "Manager is planning", proposed: "Waiting for your OK",
-  approved: "Running", done: "Done", rejected: "Rejected" };
-const COLOR = { claude: "var(--claude)", codex: "var(--codex)", gemini: "var(--gemini)" };
 const store = { get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
                 set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
-let state = null, mode = store.get("hub.mode") || "task", open = null, openPlan = null, detailKey = "", planKey = "";
+
+let state = null, mode = store.get("hub.mode") || "task";
+const open = new Set(), keys = {}, bodies = {};   // expanded cards; last render key and body per card
 const pick = { builder: store.get("hub.builder") || "codex", reviewer: store.get("hub.reviewer") || "claude",
                manager: store.get("hub.manager") || "claude" };
+const modelPick = { builder: "", reviewer: "", manager: "" };
+let reviewerTouched = false;
 
 async function api(path, opts = {}) {
   const r = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", "X-Hub": "1", ...(opts.headers || {}) } });
   if (r.status === 401 || r.redirected) { location.href = "/login?next=/hub/"; throw new Error("Signed out"); }
   const data = await r.json().catch(() => ({}));
   if (!r.ok) {
-    // FastAPI validation errors are a list of {loc, msg}; turn them into words.
     const d = data.detail;
     const text = Array.isArray(d) ? d.map(x => `${(x.loc || []).slice(-1)[0] || "field"}: ${x.msg}`).join("; ") : d;
     throw new Error(text || `HTTP ${r.status}`);
@@ -221,239 +299,414 @@ function ago(t) {
   if (s < 60) return "now"; if (s < 3600) return `${Math.floor(s / 60)}m`;
   if (s < 86400) return `${Math.floor(s / 3600)}h`; return `${Math.floor(s / 86400)}d`;
 }
-const label = k => (state && state.agents.find(a => a.key === k) || {}).label || k;
-function agentDot(key) { const d = el("span", "dot"); d.style.background = COLOR[key] || "var(--faint)"; return d; }
-function statusChip(st) {
-  const c = el("span", `status s-${st}`, LABEL[st] || st);
-  if (["building", "fixing", "reviewing", "managing", "approved"].includes(st)) c.classList.add("pulse");
-  return c;
-}
-function agentSelect(value, onChange) {
-  const sel = el("select");
-  state.agents.forEach(a => { const o = el("option", null, a.label); o.value = a.key; o.selected = a.key === value; sel.append(o); });
-  sel.onchange = () => onChange(sel.value);
-  return sel;
-}
-
-// ---------------------------------------------------------------- form
-function setMode(m) {
-  mode = m; store.set("hub.mode", m);
-  $("#m-task").setAttribute("aria-selected", m === "task"); $("#m-plan").setAttribute("aria-selected", m === "plan");
-  $("#f-task").hidden = $("#f-task2").hidden = m !== "task";
-  $("#f-plan").hidden = $("#f-plan2").hidden = m !== "plan";
-  $("#start").textContent = m === "task" ? "Start" : "Ask the manager for a plan";
-  selfWarn();
-}
-$("#m-task").onclick = () => setMode("task"); $("#m-plan").onclick = () => setMode("plan");
-function selfWarn() { $("#selfwarn").hidden = !(mode === "task" && pick.builder === pick.reviewer); }
-
-function renderPickers() {
-  document.querySelectorAll("[data-pick]").forEach(box => {
-    const role = box.dataset.pick;
-    if (box.children.length) return;
-    state.agents.forEach(a => {
-      const b = el("button"); b.type = "button"; b.append(agentDot(a.key), a.label);
-      b.setAttribute("aria-pressed", a.key === pick[role]);
-      b.onclick = () => { pick[role] = a.key; store.set(`hub.${role}`, a.key);
-        [...box.children].forEach(x => x.setAttribute("aria-pressed", x === b)); selfWarn(); };
-      box.append(b);
-    });
-  });
-  selfWarn();
-}
-function renderAgents() {
-  const box = $("#agents"); box.replaceChildren();
-  const errs = $("#agenterr"); errs.replaceChildren();
-  state.agents.filter(a => a.test && a.test.ok === false).forEach(a =>
-    errs.append(el("div", "m", `${a.label}: ${a.test.detail || "not working"}`)));
-  errs.hidden = !errs.children.length;
-  state.agents.forEach(a => {
-    const c = el("span", "chip"); const d = agentDot(a.key);
-    if (a.test) d.style.background = a.test.ok === null ? "var(--warn)" : a.test.ok ? "var(--ok)" : "var(--bad)";
-    c.append(d, a.label);
-    if (a.test) c.title = `${a.test.version || ""} ${a.test.detail || ""}`.trim();
-    box.append(c);
-  });
-}
-
-// ---------------------------------------------------------------- lists
-function row(dotKey, title, sub, status, current, onclick) {
-  const b = el("button", "task"); b.type = "button"; b.setAttribute("aria-current", current);
-  const mid = el("div"); mid.style.minWidth = "0";
-  mid.append(el("div", "t", title), el("div", "sub m", sub));
-  b.append(agentDot(dotKey), mid, statusChip(status)); b.onclick = onclick;
-  return b;
-}
-function renderTasks() {
-  const box = $("#tasks"); box.replaceChildren();
-  if (!state.tasks.length) { box.append(el("div", "empty", "No tasks yet. Start one on the left.")); return; }
-  state.tasks.forEach(t => box.append(row(t.agent, t.title,
-    `#${t.id} · ${label(t.agent)} → ${label(t.reviewer || "claude")}` + (t.plan_id ? ` · plan #${t.plan_id}` : "") +
-    (t.pr ? ` · PR #${t.pr}` : "") + (t.round ? ` · round ${t.round}` : "") + ` · ${ago(t.updated_at)}`,
-    t.status, open === t.id, () => { open = open === t.id ? null : t.id; detailKey = ""; renderTasks(); loadDetail(); })));
-}
-function renderPlans() {
-  $("#plans-card").hidden = !state.plans.length;
-  const box = $("#plans"); box.replaceChildren();
-  state.plans.forEach(p => box.append(row(p.manager, p.request.split("\n")[0].slice(0, 120),
-    `plan #${p.id} · manager ${label(p.manager)} · reviewer ${label(p.reviewer)}` +
-    (p.tasks && p.tasks.length ? ` · ${p.tasks.length} tasks` : "") + ` · ${ago(p.updated_at)}`,
-    p.status, openPlan === p.id, () => { openPlan = openPlan === p.id ? null : p.id; planKey = ""; renderPlans(); loadPlan(); })));
-}
-
-function actions(msg) {
-  return async (path, body, okText) => {
-    msg.className = "msg"; msg.textContent = "Working…";
-    try { await api(path, { method: "POST", body: JSON.stringify(body || {}) }); msg.className = "msg ok"; msg.textContent = okText; detailKey = planKey = ""; refresh(); }
-    catch (e) { msg.className = "msg err"; msg.textContent = e.message; }
-  };
+const agentOf = k => (state.agents.find(a => a.key === k) || { key: k, label: k, color: "#8C8C88" });
+const on = () => state.agents.filter(a => a.enabled);
+function dot(k) { const d = el("span", "dot"); d.style.background = agentOf(k).color; return d; }
+function tag(k, model) {
+  const t = el("span", "who-tag"); t.append(dot(k), agentOf(k).label + (model ? ` (${model})` : ""));
+  return t;
 }
 function link(text, url) { const a = el("a", null, text); a.href = url; a.target = "_blank"; a.rel = "noopener"; return a; }
 
-// ---------------------------------------------------------------- plan detail
-async function loadPlan() {
-  const box = $("#pdetail");
-  if (!openPlan) { box.hidden = true; return; }
-  let d; try { d = await api(`/hub/api/plans/${openPlan}`); } catch (e) { return; }
-  const key = JSON.stringify([d.plan.status, d.plan.updated_at, d.tasks.map(t => [t.status, t.updated_at]), d.log.length]);
-  if (key === planKey) return; planKey = key;
-  const p = d.plan; box.hidden = false; box.replaceChildren();
-  box.append(el("h3", null, `Plan #${p.id}`));
-  const meta = el("div", "meta"); meta.append(statusChip(p.status), el("span", null, `Manager: ${label(p.manager)}`)); box.append(meta);
-  box.append(el("div", "ptask", p.request));
-  if (p.note) box.append(el("div", "note", p.note));
-  if (p.summary) box.append(el("p", null, p.summary));
-  const msg = el("div", "msg"); const act = actions(msg);
-  const choices = (p.tasks || []).map(t => ({ builder: t.builder, reviewer: t.reviewer || p.reviewer }));
+// ---------------------------------------------------------------- the form
+const ROLE_LABEL = { builder: "Builder", reviewer: "Reviewer", manager: "Manager" };
+function renderRole(role) {
+  const box = $(`#role-${role}`); box.replaceChildren();
+  const agents = on();
+  if (!agents.find(a => a.key === pick[role]) && agents.length) pick[role] = agents[0].key;
+  box.append(el("label", "f", ROLE_LABEL[role]));
+  const row = el("div", "who"); row.setAttribute("role", "group"); row.setAttribute("aria-label", ROLE_LABEL[role]);
+  agents.forEach(a => {
+    const b = el("button"); b.type = "button"; b.style.setProperty("--c", a.color);
+    b.append(dot(a.key), a.label); b.setAttribute("aria-pressed", a.key === pick[role]);
+    b.onclick = () => {
+      pick[role] = a.key; modelPick[role] = ""; store.set(`hub.${role}`, a.key);
+      if (role === "reviewer") reviewerTouched = true;
+      if (role === "builder" && !reviewerTouched && pick.reviewer === a.key) {
+        const other = agents.find(x => x.key !== a.key); if (other) pick.reviewer = other.key;
+      }
+      renderForm();
+    };
+    row.append(b);
+  });
+  box.append(row);
+  const a = agentOf(pick[role]);
+  if (a.has_models) {
+    const mr = el("div", "model-row");
+    const sel = el("select"); sel.setAttribute("aria-label", `${ROLE_LABEL[role]} model`);
+    const def = el("option", null, a.model ? `Model: ${a.model} (default)` : "Model: the CLI's default"); def.value = "";
+    sel.append(def);
+    a.models.filter(m => m !== a.model).forEach(m => { const o = el("option", null, m); o.value = m; sel.append(o); });
+    const other = el("option", null, "Other model…"); other.value = "__other"; sel.append(other);
+    const input = el("input"); input.type = "text"; input.placeholder = "model name"; input.hidden = true;
+    const cur = modelPick[role];
+    if (cur && !a.models.includes(cur)) { sel.value = "__other"; input.hidden = false; input.value = cur; } else sel.value = cur;
+    sel.onchange = () => { input.hidden = sel.value !== "__other"; modelPick[role] = sel.value === "__other" ? input.value.trim() : sel.value; };
+    input.oninput = () => { modelPick[role] = input.value.trim(); };
+    mr.append(sel, input); box.append(mr);
+  }
+}
+function renderForm() {
+  $("#m-task").setAttribute("aria-selected", mode === "task"); $("#m-plan").setAttribute("aria-selected", mode === "plan");
+  $("#f-task").hidden = $("#role-builder").hidden = mode !== "task";
+  $("#f-plan").hidden = $("#role-manager").hidden = mode !== "plan";
+  $("#start").textContent = mode === "task" ? "Start the task" : "Ask for a plan";
+  renderRole(mode === "task" ? "builder" : "manager"); renderRole("reviewer");
+  $("#selfwarn").hidden = !(mode === "task" && pick.builder === pick.reviewer);
+}
+function setMode(m) { mode = m; store.set("hub.mode", m); renderForm(); }
+$("#m-task").onclick = () => setMode("task"); $("#m-plan").onclick = () => setMode("plan");
 
-  if (p.status === "proposed") {
-    (p.tasks || []).forEach((t, i) => {
-      const c = el("div", "ptask");
-      c.append(el("div", "t", `${i + 1}. ${t.title}`), el("div", "d", t.details));
-      if (t.done_when) c.append(el("div", "d", `Done when: ${t.done_when}`));
-      if (t.why) c.append(el("div", "why", `Why ${label(t.builder)}: ${t.why}`));
-      const pair = el("div", "pair mt"); const w = el("span", "warn");
-      const upd = () => { w.textContent = choices[i].builder === choices[i].reviewer ? "⚠️ reviews its own work" : ""; };
-      pair.append("Builder", agentSelect(choices[i].builder, v => { choices[i].builder = v; upd(); }),
-                  "Reviewer", agentSelect(choices[i].reviewer, v => { choices[i].reviewer = v; upd(); }), w);
-      upd(); c.append(pair); box.append(c);
-    });
-    const notes = el("textarea"); notes.placeholder = "Want changes? Tell the manager what to change"; notes.style.minHeight = "64px"; notes.style.marginTop = "12px";
-    const acts = el("div", "row mt");
-    const ok = el("button", "btn primary", "Approve & start");
-    ok.onclick = () => act(`/hub/api/plans/${p.id}/approve`, { tasks: choices }, "Approved. Step 1 is starting.");
-    const ch = el("button", "btn", "Ask for changes");
-    ch.onclick = () => act(`/hub/api/plans/${p.id}/revise`, { notes: notes.value }, "Sent back to the manager.");
-    const no = el("button", "btn ghost", "Reject");
-    no.onclick = () => act(`/hub/api/plans/${p.id}/reject`, null, "Rejected.");
-    acts.append(ok, ch, no); box.append(notes, acts, msg);
-  } else if (p.status === "failed") {
-    const notes = el("textarea"); notes.placeholder = "Optional notes for the manager"; notes.style.minHeight = "64px";
-    const acts = el("div", "row mt"); const again = el("button", "btn", "Try again");
-    again.onclick = () => act(`/hub/api/plans/${p.id}/revise`, { notes: notes.value }, "Planning again.");
-    acts.append(again); box.append(notes, acts, msg);
-  } else if (d.tasks.length) {
-    const list = el("div", "tasks mt");
-    d.tasks.forEach(t => list.append(row(t.agent, `${t.plan_order + 1}. ${t.title}`,
-      `#${t.id} · ${label(t.agent)} → ${label(t.reviewer)}` + (t.pr ? ` · PR #${t.pr}` : ""), t.status, false,
-      () => { open = t.id; detailKey = ""; renderTasks(); loadDetail(); $("#detail").scrollIntoView({ behavior: "smooth" }); })));
-    box.append(list);
-    if (p.status === "approved") {
-      const acts = el("div", "row mt"); const x = el("button", "btn ghost", "Cancel plan");
-      x.onclick = () => { if (confirm("Cancel the plan? Open PRs are closed.")) act(`/hub/api/plans/${p.id}/cancel`, null, "Plan cancelled."); };
-      acts.append(x); box.append(acts, msg);
+$("#new").onsubmit = async ev => {
+  ev.preventDefault();
+  const msg = $("#newmsg"); const bad = t => { msg.className = "formmsg err"; msg.textContent = t; };
+  if (mode === "task" && $("#title").value.trim().length < 3) return bad("Write the task first.");
+  if (mode === "plan" && $("#request").value.trim().length < 10) return bad("Describe what you want in a sentence or two.");
+  msg.className = "formmsg"; msg.textContent = "Starting…";
+  try {
+    if (mode === "task") {
+      const r = await api("/hub/api/tasks", { method: "POST", body: JSON.stringify({
+        title: $("#title").value, body: $("#body").value, done_when: $("#done").value,
+        agent: pick.builder, model: modelPick.builder, reviewer: pick.reviewer, reviewer_model: modelPick.reviewer }) });
+      msg.className = "formmsg ok"; msg.textContent = `Task #${r.id} started.`;
+      $("#title").value = $("#body").value = $("#done").value = ""; open.add(`t${r.id}`);
+    } else {
+      const r = await api("/hub/api/plans", { method: "POST", body: JSON.stringify({
+        request: $("#request").value, manager: pick.manager, manager_model: modelPick.manager,
+        reviewer: pick.reviewer, reviewer_model: modelPick.reviewer }) });
+      msg.className = "formmsg ok"; msg.textContent = `${agentOf(pick.manager).label} is planning. You approve the plan before anything is built.`;
+      $("#request").value = ""; open.add(`p${r.id}`);
     }
-  }
-  if (["planning", "managing"].includes(p.status)) {
-    const acts = el("div", "row mt"); const x = el("button", "btn ghost", "Cancel");
-    x.onclick = () => act(`/hub/api/plans/${p.id}/cancel`, null, "Cancelled.");
-    acts.append(x); box.append(acts, msg);
-  }
-  if (d.log) { const det = el("details"); det.append(el("summary", null, "Manager's log"), el("pre", "log m", d.log)); box.append(det); }
+    refresh();
+  } catch (e) { bad(e.message); }
+};
+
+// ---------------------------------------------------------------- header + now running
+function renderCrew() {
+  const box = $("#crew"); box.replaceChildren();
+  state.agents.forEach(a => {
+    const b = el("button", "member" + (a.enabled ? "" : " off")); b.type = "button";
+    const d = dot(a.key);
+    if (a.test && a.test.ok === false) d.style.boxShadow = "0 0 0 2px var(--stop)";
+    b.append(d, a.label, el("span", "n", a.enabled ? `${a.today.runs} today` : "off"));
+    b.title = a.test ? `${a.test.version || ""} ${a.test.detail || ""}`.trim() : "Not tested yet";
+    b.onclick = openAgents; box.append(b);
+  });
+  const errs = $("#agenterr"); errs.replaceChildren();
+  state.agents.filter(a => a.test && a.test.ok === false).forEach(a =>
+    errs.append(el("div", "notice bad", `${a.label} isn't working: ${a.test.detail || "no answer"}`)));
+}
+const VERB = { build: "is building", fix: "is fixing", review: "is reviewing", manage: "is planning", checks: "is running the tests for" };
+function renderNow() {
+  const box = $("#now"); const r = state.running;
+  if (!r) { box.hidden = true; return; }
+  box.hidden = false; box.replaceChildren(); box.style.setProperty("--agent", agentOf(r.agent).color);
+  const head = el("div", "now-head");
+  const live = el("span", "live"); live.append(el("span", "dot"), "Running now");
+  head.append(live, el("strong", "wide", r.label + (r.model ? ` (${r.model})` : "")),
+              el("span", "what", `${VERB[r.role] || "is working on"} “${r.title}”`),
+              el("span", "steel", ago(r.started)));
+  const pre = el("pre", "mono", r.log || "Starting…");
+  box.append(head, pre); pre.scrollTop = pre.scrollHeight;
 }
 
-// ---------------------------------------------------------------- task detail
-async function loadDetail() {
-  const box = $("#detail");
-  if (!open) { box.hidden = true; return; }
-  let d; try { d = await api(`/hub/api/tasks/${open}`); } catch (e) { return; }
-  const key = JSON.stringify([d.task.status, d.task.updated_at, d.events.length, d.log.length]);
-  if (key === detailKey) return; detailKey = key;
-  const t = d.task; box.hidden = false; box.replaceChildren();
-  box.append(el("h3", null, t.title));
-  const meta = el("div", "meta");
-  meta.append(statusChip(t.status), el("span", null, `${label(t.agent)} builds · ${label(t.reviewer || "claude")} reviews`));
-  if (t.issue_url) meta.append(link(`Issue #${t.issue}`, t.issue_url));
-  if (t.pr_url) meta.append(link(`PR #${t.pr}`, t.pr_url));
-  if (t.branch) meta.append(el("span", "m", t.branch));
-  box.append(meta);
-  if (t.agent === t.reviewer) box.append(el("div", "warn", "The builder reviews its own work."));
-  if (t.note) box.append(el("div", "note", t.note));
+// ---------------------------------------------------------------- the rail
+const STOPS = ["Build", "PR", "Review", "Ready", "Merged", "Live"];
+function railFor(t) {
+  const st = t.status; let at = 0, how = "now";
+  if (st === "cancelled") { at = -1; how = "off"; }
+  else if (st === "waiting") how = "wait";
+  else if (!t.pr) how = ["needs_joe", "failed"].includes(st) ? "stuck" : "now";
+  else if (["reviewing", "fixing", "queued"].includes(st)) at = 2;
+  else if (["needs_joe", "failed"].includes(st)) { at = 2; how = "stuck"; }
+  else if (st === "ready") { at = 3; how = "done"; }
+  else if (st === "merged") {
+    at = t.deploy ? 5 : 4;
+    how = { success: "live", failure: "stuck", pending: "now" }[t.deploy] || "done";
+  }
+  const rail = el("div", "rail"); rail.setAttribute("role", "img");
+  rail.setAttribute("aria-label", `Progress: ${at >= 0 ? STOPS[at] : "stopped"}`);
+  STOPS.forEach((name, i) => {
+    let cls = "stop";
+    if (how === "live") cls += " live";
+    else if (i < at) cls += " done";
+    else if (i === at && how !== "wait") cls += { now: " here", stuck: " stuck", done: " done" }[how] || "";
+    const stop = el("div", cls); stop.append(el("i"), name); rail.append(stop);
+  });
+  return rail;
+}
 
-  const acts = el("div", "row mt"); const msg = el("div", "msg"); const act = actions(msg);
+// ---------------------------------------------------------------- board
+const GROUP = { needs_joe: "needs", failed: "needs", ready: "ready", queued: "work", building: "work", fixing: "work",
+                reviewing: "work", waiting: "work", merged: "done", cancelled: "done" };
+const SAY = { needs_joe: "Needs you", failed: "Failed", ready: "Ready to merge", queued: "Queued", building: "Building",
+              fixing: "Fixing", reviewing: "In review", waiting: "Waits for the step before", merged: "Merged", cancelled: "Cancelled",
+              planning: "Waiting to plan", managing: "Planning", proposed: "Waiting for your OK", approved: "Running",
+              done: "Done", rejected: "Rejected" };
+
+function renderBoard() {
+  const board = $("#board"); board.replaceChildren();
+  const groups = { needs: [], ready: [], work: [], done: [] };
+  state.plans.forEach(p => {
+    const g = p.status === "proposed" || p.status === "failed" ? "needs"
+            : ["planning", "managing", "approved"].includes(p.status) ? "work" : "done";
+    groups[g].push({ kind: "p", item: p, at: p.updated_at });
+  });
+  state.tasks.forEach(t => groups[GROUP[t.status] || "work"].push({ kind: "t", item: t, at: t.updated_at }));
+  const titles = { needs: "Needs you", ready: "Ready to merge", work: "Working", done: "Done" };
+  const empty = { needs: "Nothing waiting for you.", ready: "No pull requests waiting.",
+                  work: "No agent is busy. Start a task or ask for a plan.", done: "Merged work shows up here." };
+  ["needs", "ready", "work", "done"].forEach(g => {
+    const items = groups[g].sort((a, b) => b.at - a.at).slice(0, g === "done" ? 10 : 50);
+    if (g === "ready" && !items.length) return;
+    const sec = el("section", `group ${g}`);
+    const h = el("h2", "wide"); h.append(titles[g], el("span", "count", String(items.length)));
+    sec.append(h);
+    const list = el("div", "list");
+    if (!items.length) list.append(el("div", "empty", empty[g]));
+    items.forEach(x => list.append(x.kind === "t" ? taskCard(x.item, g) : planCard(x.item, g)));
+    sec.append(list); board.append(sec);
+  });
+}
+
+function shell(id, g, title, crewline, stateText, extra) {
+  const card = el("article", "card"); card.dataset.id = id;
+  const head = el("button", "head"); head.type = "button"; head.setAttribute("aria-expanded", open.has(id));
+  const left = el("div"); left.style.minWidth = "0";
+  left.append(el("div", "title", title), crewline);
+  head.append(left, el("div", `state ${g}`, stateText));
+  if (extra) head.append(extra);
+  // The open card's body is kept between refreshes, so typing isn't lost.
+  const body = bodies[id] || (bodies[id] = el("div", "body")); body.hidden = !open.has(id);
+  head.onclick = () => { open.has(id) ? open.delete(id) : open.add(id); keys[id] = ""; renderBoard(); };
+  card.setAttribute("aria-expanded", open.has(id)); card.append(head, body);
+  return { card, body };
+}
+
+function taskCard(t, g) {
+  const id = `t${t.id}`;
+  const line = el("div", "crewline");
+  line.append(tag(t.agent, t.model), el("span", "arrow", "→"), tag(t.reviewer || "claude", t.reviewer_model));
+  if (t.plan_id) line.append(el("span", "steel", `plan ${t.plan_id}, step ${t.plan_order + 1}`));
+  if (t.round) line.append(el("span", "steel", `round ${t.round}`));
+  line.append(el("span", "steel", ago(t.updated_at)));
+  let stateText = SAY[t.status] || t.status;
+  if (t.status === "merged" && t.deploy) stateText = { pending: "Deploying…", success: "Live", failure: "Deploy failed", unknown: "Merged" }[t.deploy];
+  const { card, body } = shell(id, g, t.title, line, stateText, railFor(t));
+  if (open.has(id)) loadTask(t.id, body);
+  return card;
+}
+
+async function loadTask(tid, body) {
+  const id = `t${tid}`;
+  let d; try { d = await api(`/hub/api/tasks/${tid}`); } catch (e) { return; }
+  const key = JSON.stringify([d.task.status, d.task.updated_at, d.events.length, d.log.length]);
+  if (keys[id] === key && body.childElementCount) return;
+  if (body.contains(document.activeElement) && body.childElementCount) return;   // you're typing: update later
+  keys[id] = key;
+  const t = d.task; body.hidden = false; body.replaceChildren();
+  const links = el("div", "links");
+  if (t.issue_url) links.append(link(`Issue #${t.issue}`, t.issue_url));
+  if (t.pr_url) links.append(link(`Pull request #${t.pr}`, t.pr_url));
+  if (t.deploy) links.append(el("span", `deploy ${t.deploy}`, { pending: "Deploying…", success: "Live on the VPS", failure: "Deploy failed", unknown: "Deploy unknown" }[t.deploy]));
+  body.append(links);
+  if (t.agent === t.reviewer) body.append(el("div", "selfwarn", "The builder reviews its own work."));
+  if (t.note) body.append(el("div", "note", t.note));
+  if (t.deploy === "failure") body.append(el("div", "note", "The league keeps running on the previous version. Open GitHub → Actions, pick the failed CI run, press Re-run."));
+  const acts = el("div", "actions"); const msg = el("div", "msg");
+  const act = async (path, payload, okText) => {
+    msg.className = "msg"; msg.textContent = "Working…";
+    try { await api(path, { method: "POST", body: JSON.stringify(payload || {}) }); msg.className = "msg ok"; msg.textContent = okText; keys[id] = ""; refresh(); }
+    catch (e) { msg.className = "msg err"; msg.textContent = e.message; }
+  };
   if (t.status === "ready") {
-    const m = el("button", "btn good", "Merge & deploy");
-    m.onclick = () => { if (confirm(`Merge PR #${t.pr}? It deploys to the live VPS.`)) act(`/hub/api/tasks/${t.id}/merge`, null, "Merged. Deploying."); };
+    const m = el("button", "btn ok", "Merge and deploy");
+    m.onclick = () => { if (confirm(`Merge pull request #${t.pr}? It deploys to the live VPS.`)) act(`/hub/api/tasks/${t.id}/merge`, null, "Merged. Deploying now."); };
     acts.append(m);
   }
   if (["needs_joe", "failed", "ready", "reviewing", "waiting"].includes(t.status)) {
-    const ta = el("textarea"); ta.placeholder = t.status === "waiting" ? "Optional instructions" : "Optional: tell the builder what to do next"; ta.style.minHeight = "64px";
-    const c = el("button", "btn", t.status === "waiting" ? "Start now" : "Continue");
+    const ta = el("textarea"); ta.placeholder = t.status === "waiting" ? "Optional instructions" : "Optional: tell the builder what to change";
+    const c = el("button", "btn", t.status === "waiting" ? "Start now" : "Send back to the builder");
     c.onclick = () => act(`/hub/api/tasks/${t.id}/continue`, { instructions: ta.value }, "Sent to the builder.");
-    box.append(ta); acts.append(c);
+    body.append(ta); acts.append(c);
   }
   if (!["merged", "cancelled"].includes(t.status)) {
-    const x = el("button", "btn ghost", "Cancel");
-    x.onclick = () => { if (confirm("Cancel this task? An open PR is closed.")) act(`/hub/api/tasks/${t.id}/cancel`, null, "Cancelled."); };
+    const x = el("button", "btn quiet", "Cancel task");
+    x.onclick = () => { if (confirm("Cancel this task? Its pull request is closed.")) act(`/hub/api/tasks/${t.id}/cancel`, null, "Cancelled."); };
     acts.append(x);
   }
-  box.append(acts, msg);
-
+  body.append(acts, msg);
   const ul = el("ul", "timeline");
   d.events.forEach(ev => {
-    const li = el("li"); li.append(el("span", "when m", ago(ev.at)));
-    const body = el("div"); body.append(el("strong", null, ev.kind));
-    if (ev.text) { if (ev.text.length > 140 || ev.text.includes("\n")) body.append(el("pre", "m", ev.text)); else body.append(" ", ev.text); }
-    li.append(body); ul.append(li);
+    const li = el("li"); li.append(el("span", "when", ago(ev.at)));
+    const b = el("div"); b.append(el("strong", null, ev.kind));
+    if (ev.text) { if (ev.text.length > 140 || ev.text.includes("\n")) b.append(el("pre", "box mono", ev.text)); else b.append(" ", ev.text); }
+    li.append(b); ul.append(li);
   });
-  box.append(ul);
-  if (d.log) { const det = el("details"); det.append(el("summary", null, "Latest log"), el("pre", "log m", d.log)); box.append(det); }
+  body.append(ul);
+  if (d.log) { const det = el("details"); det.append(el("summary", null, "Latest log"), el("pre", "box mono", d.log)); body.append(det); }
 }
 
+function planCard(p, g) {
+  const id = `p${p.id}`;
+  const line = el("div", "crewline");
+  line.append(el("span", "steel", "Plan by"), tag(p.manager, p.manager_model), el("span", "arrow", "→"),
+              el("span", "steel", "reviewed by"), tag(p.reviewer, p.reviewer_model));
+  if (p.tasks && p.tasks.length) line.append(el("span", "steel", `${p.tasks.length} tasks`));
+  line.append(el("span", "steel", ago(p.updated_at)));
+  const { card, body } = shell(id, g, p.request.split("\n")[0].slice(0, 140), line, SAY[p.status] || p.status);
+  if (open.has(id)) loadPlan(p.id, body);
+  return card;
+}
+
+async function loadPlan(pid, body) {
+  const id = `p${pid}`;
+  let d; try { d = await api(`/hub/api/plans/${pid}`); } catch (e) { return; }
+  const key = JSON.stringify([d.plan.status, d.plan.updated_at, d.tasks.map(t => [t.status, t.updated_at]), d.log.length]);
+  if (keys[id] === key && body.childElementCount) return;
+  if (body.contains(document.activeElement) && body.childElementCount) return;
+  keys[id] = key;
+  const p = d.plan; body.hidden = false; body.replaceChildren();
+  if (p.request.length > 140 || p.request.includes("\n")) body.append(el("div", "ptask", p.request));
+  if (p.note) body.append(el("div", "note", p.note));
+  if (p.summary) body.append(el("p", null, p.summary));
+  const msg = el("div", "msg");
+  const act = async (path, payload, okText) => {
+    msg.className = "msg"; msg.textContent = "Working…";
+    try { await api(path, { method: "POST", body: JSON.stringify(payload || {}) }); msg.className = "msg ok"; msg.textContent = okText; keys[id] = ""; refresh(); }
+    catch (e) { msg.className = "msg err"; msg.textContent = e.message; }
+  };
+  const choices = (p.tasks || []).map(t => ({ builder: t.builder, reviewer: t.reviewer || p.reviewer }));
+  const sel = (value, change) => {
+    const s = el("select"); on().forEach(a => { const o = el("option", null, a.label); o.value = a.key; o.selected = a.key === value; s.append(o); });
+    s.onchange = () => change(s.value); return s;
+  };
+  if (p.status === "proposed") {
+    (p.tasks || []).forEach((t, i) => {
+      const c = el("div", "ptask");
+      c.append(el("div", "t", `Step ${i + 1}: ${t.title}`), el("div", "d", t.details));
+      if (t.done_when) c.append(el("div", "d", `Done when: ${t.done_when}`));
+      if (t.why) c.append(el("div", "why", `Why ${agentOf(t.builder).label}: ${t.why}`));
+      const pair = el("div", "pair"); const w = el("span", "selfwarn");
+      const upd = () => { w.textContent = choices[i].builder === choices[i].reviewer ? "reviews its own work" : ""; };
+      pair.append("Builder", sel(choices[i].builder, v => { choices[i].builder = v; upd(); }),
+                  "Reviewer", sel(choices[i].reviewer, v => { choices[i].reviewer = v; upd(); }), w);
+      upd(); c.append(pair); body.append(c);
+    });
+    const notes = el("textarea"); notes.placeholder = "Want a different plan? Tell the manager what to change";
+    const acts = el("div", "actions");
+    const ok = el("button", "btn go", "Approve and start step 1");
+    ok.onclick = () => act(`/hub/api/plans/${p.id}/approve`, { tasks: choices }, "Approved. Step 1 is starting.");
+    const ch = el("button", "btn", "Ask for changes");
+    ch.onclick = () => act(`/hub/api/plans/${p.id}/revise`, { notes: notes.value }, "Sent back to the manager.");
+    const no = el("button", "btn quiet", "Reject");
+    no.onclick = () => act(`/hub/api/plans/${p.id}/reject`, null, "Rejected.");
+    acts.append(ok, ch, no); body.append(notes, acts, msg);
+  } else if (p.status === "failed") {
+    const notes = el("textarea"); notes.placeholder = "Optional notes for the manager";
+    const acts = el("div", "actions"); const again = el("button", "btn", "Plan again");
+    again.onclick = () => act(`/hub/api/plans/${p.id}/revise`, { notes: notes.value }, "Planning again.");
+    acts.append(again); body.append(notes, acts, msg);
+  } else if (d.tasks.length) {
+    const list = el("div", "list"); list.style.marginTop = "10px";
+    d.tasks.forEach(t => {
+      const r = el("div", "ptask");
+      const top = el("div", "crewline"); top.append(el("strong", null, `Step ${t.plan_order + 1}: ${t.title}`));
+      r.append(top, railFor(t)); list.append(r);
+    });
+    body.append(list);
+    if (p.status === "approved") {
+      const acts = el("div", "actions"); const x = el("button", "btn quiet", "Cancel the plan");
+      x.onclick = () => { if (confirm("Cancel the plan? Open pull requests are closed.")) act(`/hub/api/plans/${p.id}/cancel`, null, "Plan cancelled."); };
+      acts.append(x); body.append(acts, msg);
+    }
+  }
+  if (["planning", "managing"].includes(p.status)) {
+    const acts = el("div", "actions"); const x = el("button", "btn quiet", "Cancel");
+    x.onclick = () => act(`/hub/api/plans/${p.id}/cancel`, null, "Cancelled.");
+    acts.append(x); body.append(acts, msg);
+  }
+  if (d.log) { const det = el("details"); det.append(el("summary", null, "Manager's log"), el("pre", "box mono", d.log)); body.append(det); }
+}
+
+// ---------------------------------------------------------------- agents sheet
+function openAgents() { renderAgentCards(); $("#agents-sheet").showModal(); }
+$("#open-agents").onclick = openAgents;
+$("#close-agents").onclick = () => $("#agents-sheet").close();
+
+function renderAgentCards() {
+  const box = $("#agent-cards"); box.replaceChildren();
+  state.agents.forEach(a => {
+    const card = el("div", "agent");
+    const top = el("div", "agent-top");
+    const saved = el("span", "saved");
+    const sw = el("button", "toggle"); sw.type = "button"; sw.setAttribute("role", "switch");
+    sw.setAttribute("aria-checked", a.enabled); sw.setAttribute("aria-label", `${a.label} on or off`);
+    top.append(dot(a.key), el("strong", "wide", a.label), saved, sw);
+    const st = el("div", "agent-status" + (a.test ? (a.test.ok ? " ok" : a.test.ok === false ? " bad" : "") : ""),
+      !a.enabled ? "Switched off: not offered for new work."
+      : a.test ? (a.test.ok === null ? "Testing…" : `${a.test.ok ? "Signed in and answering" : a.test.detail}${a.test.version ? ` (${a.test.version})` : ""}`)
+      : "Not tested yet. Press Test agents.");
+    card.append(top, st, el("div", "agent-status", `Today: ${a.today.runs} runs, ${a.today.minutes} min of work`));
+    const s = { model: a.model, effort: a.effort, enabled: a.enabled };
+    const save = async () => {
+      saved.textContent = "Saving…";
+      try { await api(`/hub/api/agents/${a.key}`, { method: "POST", body: JSON.stringify(s) }); saved.textContent = "Saved"; await refresh(); }
+      catch (e) { saved.textContent = ""; alert(e.message); }
+    };
+    sw.onclick = () => { s.enabled = !s.enabled; sw.setAttribute("aria-checked", s.enabled); save(); };
+    if (a.has_models) {
+      card.append(el("label", "f", "Default model"));
+      const mr = el("div", "model-row");
+      const sel = el("select");
+      const def = el("option", null, "The CLI's own default"); def.value = ""; sel.append(def);
+      a.models.forEach(m => { const o = el("option", null, m); o.value = m; sel.append(o); });
+      const oth = el("option", null, "Other model…"); oth.value = "__other"; sel.append(oth);
+      const input = el("input"); input.type = "text"; input.placeholder = "model name, as the CLI calls it";
+      if (a.model && !a.models.includes(a.model)) { sel.value = "__other"; input.value = a.model; } else { sel.value = a.model; input.hidden = true; }
+      sel.onchange = () => { input.hidden = sel.value !== "__other"; if (sel.value !== "__other") { s.model = sel.value; save(); } else input.focus(); };
+      input.onchange = () => { s.model = input.value.trim(); save(); };
+      mr.append(sel, input);
+      if (a.can_list_models) {
+        const find = el("button", "btn sm", "Find models"); find.type = "button";
+        find.onclick = async () => {
+          find.disabled = true; find.textContent = "Asking…";
+          try { await api(`/hub/api/agents/${a.key}/models`, { method: "POST" }); await refresh(); renderAgentCards(); }
+          catch (e) { alert(e.message); find.disabled = false; find.textContent = "Find models"; }
+        };
+        mr.append(find);
+      }
+      card.append(mr);
+    }
+    if (a.efforts.length) {
+      card.append(el("label", "f", "Effort"));
+      const row = el("div", "efforts");
+      [["", "Default"], ...a.efforts.map(x => [x, { xhigh: "Extra high" }[x] || x[0].toUpperCase() + x.slice(1)])].forEach(([v, name]) => {
+        const b = el("button", null, name); b.type = "button"; b.setAttribute("aria-pressed", s.effort === v);
+        b.onclick = () => { s.effort = v; [...row.children].forEach(x => x.setAttribute("aria-pressed", x === b)); save(); };
+        row.append(b);
+      });
+      card.append(row);
+    }
+    box.append(card);
+  });
+}
+
+// ---------------------------------------------------------------- refresh
 async function refresh() {
   try { state = await api("/hub/api/state"); } catch (e) { return; }
   $("#repo").textContent = state.repo || "";
   $("#setup").hidden = state.configured;
   $("#start").disabled = !state.configured;
-  $("#test").disabled = state.testing; $("#test").textContent = state.testing ? "Testing… (a few min)" : "Test agents";
-  renderAgents(); renderPickers(); renderPlans(); renderTasks(); loadPlan(); loadDetail();
+  $("#test").disabled = state.testing; $("#test").textContent = state.testing ? "Testing…" : "Test agents";
+  renderCrew(); renderNow();
+  if (!document.activeElement || !$("#new").contains(document.activeElement)) renderForm();
+  renderBoard();
+  if ($("#agents-sheet").open && !$("#agent-cards").contains(document.activeElement)) renderAgentCards();
 }
-
-$("#new").onsubmit = async ev => {
-  ev.preventDefault();
-  const msg = $("#newmsg");
-  const bad = text => { msg.className = "msg err"; msg.textContent = text; };
-  if (mode === "task" && $("#title").value.trim().length < 3) return bad("Write the task first (at least a few words).");
-  if (mode === "plan" && $("#request").value.trim().length < 10) return bad("Describe what you want first (at least a sentence).");
-  msg.className = "msg"; msg.textContent = "Starting…";
-  try {
-    if (mode === "task") {
-      const r = await api("/hub/api/tasks", { method: "POST", body: JSON.stringify({
-        title: $("#title").value, body: $("#body").value, done_when: $("#done").value, agent: pick.builder, reviewer: pick.reviewer }) });
-      msg.className = "msg ok"; msg.textContent = `Task #${r.id} started.`;
-      $("#title").value = $("#body").value = $("#done").value = ""; open = r.id; detailKey = "";
-    } else {
-      const r = await api("/hub/api/plans", { method: "POST", body: JSON.stringify({
-        request: $("#request").value, manager: pick.manager, reviewer: pick.reviewer }) });
-      msg.className = "msg ok"; msg.textContent = `Plan #${r.id}: ${label(pick.manager)} is planning. You'll approve it before anything starts.`;
-      $("#request").value = ""; openPlan = r.id; planKey = "";
-    }
-    refresh();
-  } catch (e) { msg.className = "msg err"; msg.textContent = e.message; }
-};
 $("#test").onclick = async () => { try { await api("/hub/api/agents/test", { method: "POST" }); } catch (e) { alert(e.message); } refresh(); };
 
-setMode(mode); refresh(); setInterval(refresh, 5000);
+refresh(); setInterval(refresh, 4000);
 </script>
 </body>
 </html>

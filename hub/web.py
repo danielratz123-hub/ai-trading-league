@@ -8,17 +8,26 @@ from __future__ import annotations
 
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-from .config import Config
+from .agents import agent_command, child_env, clean_tail
+from .config import MODEL_RE, Config
 from .db import DB
 from .worker import Worker, log_text, plan_log
 
 PAGE = Path(__file__).parent / "page.html"
+
+
+def _model(v: str) -> str:
+    v = (v or "").strip()
+    if v and not MODEL_RE.match(v):
+        raise ValueError("letters, numbers and . _ - : / @ + only")
+    return v
 
 
 class NewTask(BaseModel):
@@ -27,12 +36,25 @@ class NewTask(BaseModel):
     done_when: str = Field(default="", max_length=4000)
     agent: str
     reviewer: str = "claude"
+    model: str = ""
+    reviewer_model: str = ""
+    _check = field_validator("model", "reviewer_model")(_model)
 
 
 class NewPlan(BaseModel):
     request: str = Field(min_length=10, max_length=20000)
     manager: str
     reviewer: str = "claude"
+    manager_model: str = ""
+    reviewer_model: str = ""
+    _check = field_validator("manager_model", "reviewer_model")(_model)
+
+
+class AgentSettings(BaseModel):
+    model: str = ""
+    effort: str = ""
+    enabled: bool = True
+    _check = field_validator("model")(_model)
 
 
 class Choice(BaseModel):
@@ -60,7 +82,8 @@ def same_site(x_hub: str | None = Header(default=None)) -> None:
 def public(t: dict, repo: str) -> dict:
     out = {k: t.get(k) for k in ("id", "title", "body", "done_when", "agent", "reviewer", "status",
                                  "issue", "branch", "pr", "round", "note", "plan_id", "plan_order",
-                                 "review_verdict", "created_at", "updated_at")}
+                                 "review_verdict", "model", "reviewer_model", "deploy", "merged_at",
+                                 "created_at", "updated_at")}
     base = f"https://github.com/{repo}"
     out["issue_url"] = f"{base}/issues/{t['issue']}" if t["issue"] else None
     out["pr_url"] = f"{base}/pull/{t['pr']}" if t["pr"] else None
@@ -68,14 +91,41 @@ def public(t: dict, repo: str) -> dict:
 
 
 def public_plan(p: dict) -> dict:
-    return {k: p.get(k) for k in ("id", "request", "manager", "reviewer", "status", "summary", "tasks",
-                                  "feedback", "note", "created_at", "updated_at")}
+    return {k: p.get(k) for k in ("id", "request", "manager", "reviewer", "manager_model",
+                                  "reviewer_model", "status", "summary", "tasks", "feedback", "note",
+                                  "created_at", "updated_at")}
+
+
+def today_start() -> float:
+    t = time.localtime()
+    return time.mktime((t.tm_year, t.tm_mon, t.tm_mday, 0, 0, 0, 0, 0, -1))
 
 
 def create_app(cfg: Config, db: DB, worker: Worker | None) -> FastAPI:
     app = FastAPI(title="Agent Hub", docs_url=None, redoc_url=None, openapi_url=None)
     agent_tests: dict[str, dict] = {}
+    found_models: dict[str, list[str]] = {}
     test_lock = threading.Lock()
+
+    def settings(key: str) -> dict:
+        if worker is not None:
+            return worker.agent_settings(key)
+        s = db.setting(f"agent:{key}", {}) or {}
+        return {"model": s.get("model", ""), "effort": s.get("effort", ""), "enabled": s.get("enabled", True)}
+
+    def agent_or_400(key: str, role: str) -> None:
+        if key not in cfg.agents:
+            raise HTTPException(400, f"Unknown {role}.")
+        if not settings(key)["enabled"]:
+            raise HTTPException(400, f"{cfg.agents[key]['label']} is switched off (Agents panel).")
+
+    def running() -> dict | None:
+        cur = worker.current if worker is not None else None
+        if not cur:
+            return None
+        return {**{k: v for k, v in cur.items() if k != "log"},
+                "label": cfg.agents.get(cur["agent"], {}).get("label", cur["agent"]),
+                "log": clean_tail(Path(cur["log"]), 2500)}
 
     def need_worker() -> Worker:
         if worker is None or not cfg.configured:
@@ -108,8 +158,12 @@ def create_app(cfg: Config, db: DB, worker: Worker | None) -> FastAPI:
             "repo": cfg.repo,
             "max_rounds": cfg.max_rounds,
             "testing": test_lock.locked(),
-            "agents": [{"key": k, "label": v["label"], "test": agent_tests.get(k)}
-                       for k, v in cfg.agents.items()],
+            "agents": [{"key": k, "label": v["label"], "color": v["color"], **settings(k),
+                        "efforts": v["efforts"], "models": sorted(set(v["models"]) | set(found_models.get(k, []))),
+                        "can_list_models": bool(v["list_models"]), "has_models": bool(v["model_args"]),
+                        "today": usage.get(k, {"runs": 0, "minutes": 0}), "test": agent_tests.get(k)}
+                       for k, v in cfg.agents.items() for usage in [db.runs_since(today_start())]],
+            "running": running(),
             "tasks": [public(t, cfg.repo) for t in db.list(50)],
             "plans": [public_plan(p) for p in db.plans(20)],
         }
@@ -123,21 +177,22 @@ def create_app(cfg: Config, db: DB, worker: Worker | None) -> FastAPI:
     @app.post("/hub/api/tasks", dependencies=[Depends(same_site)])
     def create(body: NewTask):
         w = need_worker()
-        if body.agent not in cfg.agents or body.reviewer not in cfg.agents:
-            raise HTTPException(400, "Unknown agent.")
+        agent_or_400(body.agent, "builder")
+        agent_or_400(body.reviewer, "reviewer")
         tid = db.create_task(body.title.strip(), body.body.strip(), body.done_when.strip(), body.agent,
-                             body.reviewer)
-        db.event(tid, "created", f"{cfg.agents[body.agent]['label']} builds, "
-                                 f"{cfg.agents[body.reviewer]['label']} reviews")
+                             body.reviewer, model=body.model, reviewer_model=body.reviewer_model)
+        db.event(tid, "created", f"{w.model_label(body.agent, body.model)} builds, "
+                                 f"{w.model_label(body.reviewer, body.reviewer_model)} reviews")
         w.wake.set()
         return {"id": tid}
 
     @app.post("/hub/api/plans", dependencies=[Depends(same_site)])
     def create_plan(body: NewPlan):
         w = need_worker()
-        if body.manager not in cfg.agents or body.reviewer not in cfg.agents:
-            raise HTTPException(400, "Unknown agent.")
-        pid = db.create_plan(body.request.strip(), body.manager, body.reviewer)
+        agent_or_400(body.manager, "manager")
+        agent_or_400(body.reviewer, "reviewer")
+        pid = db.create_plan(body.request.strip(), body.manager, body.reviewer, body.manager_model,
+                             body.reviewer_model)
         w.wake.set()
         return {"id": pid}
 
@@ -204,6 +259,43 @@ def create_app(cfg: Config, db: DB, worker: Worker | None) -> FastAPI:
             raise HTTPException(409, err)
         return {"ok": True}
 
+    @app.post("/hub/api/agents/{key}", dependencies=[Depends(same_site)])
+    def save_agent(key: str, body: AgentSettings):
+        if key not in cfg.agents:
+            raise HTTPException(404, "No such agent.")
+        a = cfg.agents[key]
+        if body.effort and body.effort not in a["efforts"]:
+            raise HTTPException(400, f"Effort must be one of: {', '.join(a['efforts']) or 'none'}.")
+        if body.model and not a["model_args"]:
+            raise HTTPException(400, f"{a['label']} has no model setting in agents.yaml.")
+        others_on = [k for k in cfg.agents if k != key and settings(k)["enabled"]]
+        if not body.enabled and not others_on:
+            raise HTTPException(400, "Keep at least one agent switched on.")
+        db.set_setting(f"agent:{key}", body.model_dump())
+        return {"ok": True}
+
+    @app.post("/hub/api/agents/{key}/models", dependencies=[Depends(same_site)])
+    def list_models(key: str):
+        """Ask the CLI which models it can use (only agents with list_models)."""
+        a = cfg.agents.get(key)
+        if not a or not a["list_models"]:
+            raise HTTPException(404, "This agent can't list its models; type a model name instead.")
+        try:
+            r = subprocess.run(a["list_models"], capture_output=True, text=True, timeout=90,
+                               env=child_env(extra=tuple(a["env_keys"])), stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            raise HTTPException(502, f"Couldn't list models ({type(e).__name__}).") from e
+        names = []
+        for line in (r.stdout or "").splitlines():
+            word = line.strip().lstrip("*-•> ").split(" ")[0].strip("`',")
+            if MODEL_RE.match(word) and any(c.isdigit() or c in "-./" for c in word) and word not in names:
+                names.append(word)
+        if not names:
+            raise HTTPException(502, "The CLI didn't print any model names: "
+                                     + ((r.stderr or r.stdout).strip()[-200:] or f"exit {r.returncode}"))
+        found_models[key] = names[:40]
+        return {"models": found_models[key]}
+
     @app.post("/hub/api/agents/test", dependencies=[Depends(same_site)])
     def test_agents():
         """Ask each CLI for its version and a one-word answer: shows which
@@ -214,8 +306,12 @@ def create_app(cfg: Config, db: DB, worker: Worker | None) -> FastAPI:
         def probe_all() -> None:
             try:
                 for key, a in cfg.agents.items():
+                    if not settings(key)["enabled"]:
+                        agent_tests.pop(key, None)
+                        continue
                     agent_tests[key] = {"ok": None, "detail": "testing…"}
-                    agent_tests[key] = _probe(a, cfg.data_dir)
+                    agent_tests[key] = _probe({**a, "model": settings(key)["model"],
+                                               "effort": settings(key)["effort"]}, cfg.data_dir)
             finally:
                 test_lock.release()
 
@@ -226,7 +322,6 @@ def create_app(cfg: Config, db: DB, worker: Worker | None) -> FastAPI:
 
 
 def _probe(agent_cfg: dict, data_dir: Path) -> dict:
-    from .agents import agent_command, child_env
     env = child_env(extra=tuple(agent_cfg.get("env_keys", ())))
     scratch = data_dir / "probe"
     scratch.mkdir(parents=True, exist_ok=True)

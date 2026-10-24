@@ -1,4 +1,5 @@
-"""Settings, all from environment variables (hub.env on the server).
+"""Settings, all from environment variables (hub.env on the server), plus
+the agent list in hub/agents.yaml.
 
     HUB_REPO            owner/name, e.g. danielratz123-hub/ai-trading-league
     HUB_GITHUB_TOKEN    fine-grained token for that one repo (see HUB.md)
@@ -6,47 +7,95 @@
     HUB_BASE_BRANCH     branch PRs go into (main)
     HUB_MAX_ROUNDS      review -> fix rounds before it stops and asks Joe (4)
     HUB_AGENT_TIMEOUT   minutes one agent run may take (45)
-    HUB_REVIEW_TIMEOUT  minutes to wait for CI + Claude's review (40)
-    HUB_CMD_CLAUDE / HUB_CMD_CODEX / HUB_CMD_GEMINI
-                        optional JSON list overriding an agent's command;
-                        "{prompt}" is replaced by the task prompt
+    HUB_REVIEW_TIMEOUT  minutes to wait for CI after a review (40)
+    HUB_AGENTS_FILE     extra/changed agents, server only (default $HUB_DATA/agents.yaml)
+    HUB_CMD_<AGENT>     optional JSON list replacing one agent's command
     TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID   optional phone notifications
     CLAUDE_CODE_OAUTH_TOKEN                 Claude's login (claude setup-token)
 """
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# The official CLIs in headless mode. The container is the sandbox: the
-# agents may run any command inside their own work copy (tests, ruff), and
-# the container has no league data, no .env and no GitHub token in reach.
-DEFAULT_AGENTS: dict[str, dict] = {
-    "claude": {
-        "label": "Claude",
-        "cmd": ["claude", "-p", "{prompt}", "--dangerously-skip-permissions"],
-        "version": ["claude", "--version"],
-        # Its login (from `claude setup-token`) goes to Claude only.
-        "env_keys": ["CLAUDE_CODE_OAUTH_TOKEN"],
-    },
-    "codex": {
-        "label": "Codex (GPT)",
-        "cmd": ["codex", "exec", "--dangerously-bypass-approvals-and-sandbox",
-                "--skip-git-repo-check", "{prompt}"],
-        "version": ["codex", "--version"],
-    },
-    "gemini": {
-        "label": "Gemini",
-        # Google's Antigravity CLI: signs in with your Gemini subscription
-        # (docker compose exec -it hub agy). GEMINI_API_KEY is passed too, for
-        # anyone using a key instead (see HUB.md).
-        "cmd": ["agy", "-p", "{prompt}", "--dangerously-skip-permissions"],
-        "version": ["agy", "--version"],
-        "env_keys": ["GEMINI_API_KEY"],
-    },
-}
+import yaml
+
+log = logging.getLogger("hub")
+
+AGENTS_FILE = Path(__file__).parent / "agents.yaml"
+KEY_RE = re.compile(r"^[a-z][a-z0-9-]{1,20}$")
+MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,79}$")
+LIST_FIELDS = ("cmd", "model_args", "effort_args", "efforts", "models", "list_models", "version",
+               "env_keys")
+
+
+def _clean(key: str, raw: dict, base: dict | None = None) -> dict | None:
+    """One agent definition, checked. None if it's unusable."""
+    if not KEY_RE.match(key) or not isinstance(raw, dict):
+        log.warning("agents: skipping %r (bad name or not a mapping)", key)
+        return None
+    a = dict(base or {})
+    for name in LIST_FIELDS:
+        if name in raw:
+            val = raw[name]
+            if val is None:
+                val = []
+            if not isinstance(val, list) or not all(isinstance(x, (str, int, float)) for x in val):
+                log.warning("agents: %s.%s must be a list of strings", key, name)
+                return None
+            a[name] = [str(x) for x in val]
+    for name in ("label", "color"):
+        if name in raw and raw[name] is not None:
+            a[name] = str(raw[name])[:40]
+    a.setdefault("label", key.title())
+    a.setdefault("color", "#A1A1A6")
+    for name in LIST_FIELDS:
+        a.setdefault(name, [])
+    if a["cmd"].count("{prompt}") != 1:
+        log.warning("agents: %s.cmd needs exactly one \"{prompt}\"", key)
+        return None
+    if not a["version"]:
+        a["version"] = [a["cmd"][0], "--version"]
+    a["models"] = [m for m in a["models"] if MODEL_RE.match(m)]
+    return a
+
+
+def load_agents(extra_file: Path | None = None) -> dict[str, dict]:
+    """hub/agents.yaml, then the server's own file on top (new agents, or
+    changed fields of existing ones), then HUB_CMD_<AGENT> commands."""
+    agents: dict[str, dict] = {}
+    for path in (AGENTS_FILE, extra_file):
+        if not path or not Path(path).exists():
+            continue
+        try:
+            data = yaml.safe_load(Path(path).read_text()) or {}
+        except (OSError, yaml.YAMLError) as e:
+            log.warning("agents: can't read %s (%s)", path, e)
+            continue
+        if not isinstance(data, dict):
+            continue
+        for key, raw in data.items():
+            if raw is False:                       # "codex: false" removes an agent
+                agents.pop(str(key), None)
+                continue
+            a = _clean(str(key), raw, agents.get(str(key)))
+            if a:
+                agents[str(key)] = a
+    for key, a in agents.items():
+        raw = os.getenv(f"HUB_CMD_{key.upper().replace('-', '_')}", "").strip()
+        if not raw:
+            continue
+        try:
+            cmd = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(cmd, list) and all(isinstance(x, str) for x in cmd) and cmd.count("{prompt}") == 1:
+            a["cmd"] = cmd
+    return agents
 
 
 def _int(name: str, default: int) -> int:
@@ -54,21 +103,6 @@ def _int(name: str, default: int) -> int:
         return max(1, int(os.getenv(name, "").strip() or default))
     except ValueError:
         return default
-
-
-def _agents() -> dict[str, dict]:
-    agents = {k: dict(v) for k, v in DEFAULT_AGENTS.items()}
-    for key in agents:
-        raw = os.getenv(f"HUB_CMD_{key.upper()}", "").strip()
-        if not raw:
-            continue
-        try:
-            cmd = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(cmd, list) and cmd and all(isinstance(x, str) for x in cmd):
-            agents[key]["cmd"] = cmd
-    return agents
 
 
 @dataclass(frozen=True)
@@ -81,10 +115,11 @@ class Config:
     agent_timeout: int = 45 * 60
     check_timeout: int = 20 * 60
     review_timeout: int = 40 * 60
+    deploy_timeout: int = 90 * 60
     poll_seconds: int = 20
     telegram_token: str = ""
     telegram_chat: str = ""
-    agents: dict = field(default_factory=lambda: {k: dict(v) for k, v in DEFAULT_AGENTS.items()})
+    agents: dict = field(default_factory=load_agents)
 
     @property
     def configured(self) -> bool:
@@ -92,9 +127,10 @@ class Config:
 
     @property
     def secrets(self) -> list[str]:
-        """Values that must never appear in a pushed change."""
-        values = [self.token, self.telegram_token, os.getenv("CLAUDE_CODE_OAUTH_TOKEN", ""),
-                  os.getenv("GEMINI_API_KEY", "")]
+        """Values that must never appear in a pushed change: the hub's own
+        tokens and every agent's env_keys values."""
+        names = {k for a in self.agents.values() for k in a.get("env_keys", [])}
+        values = [self.token, self.telegram_token, *(os.getenv(n, "") for n in sorted(names))]
         return [v for v in values if len(v) >= 12]
 
     @property
@@ -111,15 +147,17 @@ class Config:
 
 
 def load() -> Config:
+    data_dir = Path(os.getenv("HUB_DATA", "/hub/data"))
+    extra = Path(os.getenv("HUB_AGENTS_FILE", "").strip() or data_dir / "agents.yaml")
     return Config(
         repo=os.getenv("HUB_REPO", "").strip(),
         token=os.getenv("HUB_GITHUB_TOKEN", "").strip(),
-        data_dir=Path(os.getenv("HUB_DATA", "/hub/data")),
+        data_dir=data_dir,
         base_branch=os.getenv("HUB_BASE_BRANCH", "main").strip() or "main",
         max_rounds=_int("HUB_MAX_ROUNDS", 4),
         agent_timeout=_int("HUB_AGENT_TIMEOUT", 45) * 60,
         review_timeout=_int("HUB_REVIEW_TIMEOUT", 40) * 60,
         telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
         telegram_chat=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
-        agents=_agents(),
+        agents=load_agents(extra),
     )

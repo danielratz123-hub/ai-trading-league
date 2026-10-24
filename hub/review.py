@@ -45,6 +45,16 @@ def ci_state(runs: list[dict]) -> str | None:
     return matches[0]["conclusion"] or "unknown"
 
 
+def deploy_state(runs: list[dict]) -> str | None:
+    """The deploy of a merge commit = the CI run of its push to main
+    (lint, tests, then deploy to the VPS). "success" / "failure" / None
+    while it runs or hasn't started."""
+    pushes = [r for r in runs if r["name"] == CI_WORKFLOW and r.get("event") == "push"]
+    if not pushes or pushes[0]["status"] != "completed":
+        return None
+    return "success" if pushes[0]["conclusion"] == "success" else "failure"
+
+
 class PlanError(ValueError):
     pass
 

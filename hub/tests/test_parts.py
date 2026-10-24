@@ -94,7 +94,8 @@ def test_run_time_limit_and_stop(tmp_path):
     assert r.stopped and not r.ok
 
 
-def test_config_command_override(monkeypatch):
+def test_config_command_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("HUB_DATA", str(tmp_path))
     monkeypatch.setenv("HUB_CMD_GEMINI", '["gemini", "-m", "pro", "-p", "{prompt}"]')
     monkeypatch.setenv("HUB_CMD_CODEX", "not json")
     cfg = load()
@@ -200,7 +201,7 @@ def test_claude_login_goes_only_to_claude(monkeypatch):
     assert "CLAUDE_CODE_OAUTH_TOKEN" not in agents.child_env()
     claude_env = agents.child_env(extra=tuple(cfg.agents["claude"]["env_keys"]))
     assert claude_env["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-x"
-    assert "env_keys" not in cfg.agents["codex"]
+    assert cfg.agents["codex"]["env_keys"] == []
 
 
 def test_task_with_reviewer_and_plan_flow(tmp_path):
@@ -232,3 +233,86 @@ def test_gemini_runs_through_antigravity(monkeypatch):
     assert agents.agent_command(cfg.agents["gemini"], "hi") == ["agy", "-p", "hi", "--dangerously-skip-permissions"]
     assert "GEMINI_API_KEY" not in agents.child_env(extra=tuple(cfg.agents["claude"]["env_keys"]))
     assert "AIzaSy-test-key-123" in cfg.secrets
+
+
+
+# ---------------------------------------------------------------- agent registry
+
+def test_agents_file_ships_three_agents():
+    from hub.config import load_agents
+    a = load_agents()
+    assert list(a) == ["claude", "codex", "gemini"]
+    for agent in a.values():
+        assert agent["cmd"].count("{prompt}") == 1 and agent["model_args"] and agent["efforts"]
+
+
+def test_server_agents_file_adds_changes_and_removes(tmp_path, monkeypatch):
+    from hub.config import load_agents
+    extra = tmp_path / "agents.yaml"
+    extra.write_text("""
+qwen:
+  label: Qwen Code
+  cmd: [qwen, -p, "{prompt}", --yolo]
+  model_args: [--model, "{model}"]
+claude:
+  models: [opus]
+codex: false
+broken:
+  cmd: [x]
+"Bad Name":
+  cmd: [y, "{prompt}"]
+""")
+    a = load_agents(extra)
+    assert list(a) == ["claude", "gemini", "qwen"]
+    assert a["claude"]["models"] == ["opus"] and a["claude"]["cmd"][0] == "claude"
+    assert a["qwen"]["version"] == ["qwen", "--version"] and a["qwen"]["efforts"] == []
+
+
+def test_options_go_where_the_agent_wants_them():
+    from hub.config import load_agents
+    a = load_agents()
+    codex = {**a["codex"], "model": "gpt-x", "effort": "high"}
+    assert agents.agent_command(codex, "P")[-5:] == ["-m", "gpt-x", "-c", "model_reasoning_effort=high", "P"]
+    claude = {**a["claude"], "model": "opus", "effort": "nope"}
+    assert agents.agent_command(claude, "P")[-2:] == ["--model", "opus"]       # unknown effort dropped
+    assert agents.agent_command(a["claude"], "P") == ["claude", "-p", "P", "--dangerously-skip-permissions"]
+
+
+def test_agent_settings_api(tmp_path):
+    c, db = client(tmp_path)
+    h = {"X-Hub": "1"}
+    assert c.post("/hub/api/agents/claude", json={"model": "opus", "effort": "high"}, headers=h).status_code == 200
+    a = {x["key"]: x for x in c.get("/hub/api/state").json()["agents"]}
+    assert a["claude"]["model"] == "opus" and a["claude"]["effort"] == "high" and a["claude"]["enabled"]
+    assert c.post("/hub/api/agents/claude", json={"model": "opus; rm -rf /"}, headers=h).status_code == 422
+    assert c.post("/hub/api/agents/codex", json={"effort": "max"}, headers=h).status_code == 400
+    assert c.post("/hub/api/agents/nope", json={}, headers=h).status_code == 404
+    assert c.post("/hub/api/agents/gemini", json={"enabled": False}, headers=h).status_code == 200
+    r = c.post("/hub/api/tasks", json={"title": "Do a thing", "agent": "gemini"}, headers=h)
+    assert r.status_code == 400 and "switched off" in r.json()["detail"]
+    c.post("/hub/api/agents/codex", json={"enabled": False}, headers=h)
+    assert c.post("/hub/api/agents/claude", json={"enabled": False}, headers=h).status_code == 400
+
+
+def test_task_model_override_is_validated(tmp_path):
+    c, db = client(tmp_path)
+    h = {"X-Hub": "1"}
+    r = c.post("/hub/api/tasks", json={"title": "Do a thing", "agent": "codex", "model": "gpt-x",
+                                        "reviewer": "claude", "reviewer_model": "sonnet"}, headers=h)
+    t = db.get(r.json()["id"])
+    assert (t["model"], t["reviewer_model"]) == ("gpt-x", "sonnet")
+    assert c.post("/hub/api/tasks", json={"title": "Do a thing", "agent": "codex", "model": "$(boom)"},
+                  headers=h).status_code == 422
+
+
+def test_list_models_from_the_cli(tmp_path, monkeypatch):
+    import subprocess as sp
+    c, db = client(tmp_path)
+    out = "Available models:\n* gemini-4-argon (default)\n- gemini-4-flash\nUse /model to switch\n"
+    monkeypatch.setattr("hub.web.subprocess.run",
+                        lambda *a, **k: sp.CompletedProcess(a, 0, stdout=out, stderr=""))
+    r = c.post("/hub/api/agents/gemini/models", headers={"X-Hub": "1"})
+    assert r.json()["models"] == ["gemini-4-argon", "gemini-4-flash"]
+    g = [x for x in c.get("/hub/api/state").json()["agents"] if x["key"] == "gemini"][0]
+    assert "gemini-4-flash" in g["models"]
+    assert c.post("/hub/api/agents/codex/models", headers={"X-Hub": "1"}).status_code == 404

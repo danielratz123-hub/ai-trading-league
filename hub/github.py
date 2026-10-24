@@ -65,9 +65,21 @@ class GitHub:
     def review_comments(self, number: int) -> list[dict]:
         return self._call("GET", f"/pulls/{number}/comments", params={"per_page": 100})
 
-    def merge_pr(self, number: int, title: str) -> None:
-        self._call("PUT", f"/pulls/{number}/merge",
-                   json={"merge_method": "merge", "commit_title": title})
+    def merge_pr(self, number: int, title: str) -> str:
+        """Merge; returns the merge commit's sha (what the deploy runs on)."""
+        data = self._call("PUT", f"/pulls/{number}/merge",
+                          json={"merge_method": "merge", "commit_title": title})
+        return str(data.get("sha") or "")
+
+    def delete_branch(self, branch: str) -> None:
+        """Only the hub's own branches. Already gone is fine."""
+        if not branch.startswith("hub/"):
+            return
+        try:
+            self._call("DELETE", f"/git/refs/heads/{branch}")
+        except GitHubError as e:
+            if "422" not in str(e) and "404" not in str(e):
+                raise
 
     def close_pr(self, number: int) -> None:
         self._call("PATCH", f"/pulls/{number}", json={"state": "closed"})

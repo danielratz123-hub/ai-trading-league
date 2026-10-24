@@ -326,3 +326,77 @@ def test_bad_plan_fails_and_reject_and_cancel(tmp_path):
     w.cancel_plan(pid3)
     assert {t["status"] for t in db.plan_tasks(pid3)} == {"cancelled"}
     assert db.plan(pid3)["status"] == "cancelled"
+
+
+
+# ------------------------------------------------------------------ models, runs, deploys
+
+def test_models_reach_the_agents_and_runs_are_counted(tmp_path):
+    w, db, gh, ag, clock, sent, repos = setup(tmp_path)
+    db.set_setting("agent:claude", {"model": "opus", "effort": "high", "enabled": True})
+    tid = db.create_task("Add SPY player", "x", "y", "codex", "claude", model="gpt-x")
+    build_and_review(w)
+    builder, reviewer = ag.cfgs[0], ag.cfgs[1]
+    assert builder["model"] == "gpt-x" and builder["effort"] == ""
+    assert reviewer["model"] == "opus" and reviewer["effort"] == "high"
+    assert "Codex (gpt-x)" in gh.prs[db.get(tid)["pr"]]["body"]
+    assert "Review by Claude (opus)" in gh.comments[-1][1]
+    usage = db.runs_since(0)
+    assert usage["codex"]["runs"] == 1 and usage["claude"]["runs"] == 1
+    assert w.current is None
+
+
+def test_current_run_is_visible_while_running(tmp_path):
+    w, db, gh, ag, clock, sent, repos = setup(tmp_path)
+    seen = []
+    orig = ag.run_agent
+
+    def spy(*a, **k):
+        seen.append(dict(w.current))
+        return orig(*a, **k)
+    w.run_agent = spy
+    tid = start(db)
+    w.step()
+    assert seen[0]["role"] == "build" and seen[0]["agent"] == "codex" and seen[0]["task_id"] == tid
+    assert w.current is None
+
+
+def test_merge_tracks_the_deploy_and_deletes_the_branch(tmp_path):
+    w, db, gh, ag, clock, sent, repos = setup(tmp_path)
+    tid = start(db)
+    build_and_review(w)
+    gh.ci("success")
+    w.step()
+    branch = db.get(tid)["branch"]
+    assert w.merge(tid) is None
+    t = db.get(tid)
+    assert t["deploy"] == "pending" and t["merge_sha"].startswith("merge") and gh.deleted == [branch]
+    w.step()                                    # deploy not finished
+    assert db.get(tid)["deploy"] == "pending"
+    gh.runs = [{"name": "CI", "status": "completed", "conclusion": "success", "event": "push"}]
+    w.step()
+    assert db.get(tid)["deploy"] == "success"
+
+
+def test_failed_deploy_tells_joe(tmp_path):
+    w, db, gh, ag, clock, sent, repos = setup(tmp_path)
+    tid = start(db)
+    build_and_review(w)
+    gh.ci("success")
+    w.step()
+    gh.prs[db.get(tid)["pr"]]["merged"] = True       # merged on GitHub
+    w.step()
+    assert db.get(tid)["deploy"] == "pending"
+    gh.runs = [{"name": "CI", "status": "completed", "conclusion": "failure", "event": "push"}]
+    w.step()
+    assert db.get(tid)["deploy"] == "failure" and any("Deploy of task" in s for s in sent)
+
+
+def test_switched_off_agents_are_not_offered_to_the_manager(tmp_path):
+    w, db, gh, ag, clock, sent, repos = setup(tmp_path)
+    db.set_setting("agent:gemini", {"enabled": False})
+    db.create_plan("Add an SPY benchmark", "claude", "claude")
+    w.step()
+    assert "`gemini`" not in ag.prompts[0]
+    p = db.plans()[0]
+    assert {t["builder"] for t in p["tasks"]} <= {"claude", "codex"}
