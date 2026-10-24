@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import Config
-from . import db
+from . import db, status
 from .masking import mask_record
 
 STATIC = Path(__file__).parent / "static"
@@ -29,6 +29,10 @@ def create_app(cfg: Config | None = None) -> FastAPI:
     @app.get("/admin/healthz")
     def healthz():
         return JSONResponse({"ok": True}, headers=NO_STORE)
+
+    @app.get("/admin/api/status")
+    def operational_status():
+        return JSONResponse(status.collect(cfg), headers=NO_STORE)
 
     @app.get("/admin/api/ping")
     def ping():
