@@ -8,6 +8,7 @@
 <title>Admin · ds</title>
 <link rel="stylesheet" href="/admin/static/admin.css">
 <script src="/admin/static/admin.js" defer></script>
+<script src="/admin/static/status.js" defer></script>
 <script src="/admin/static/database.js" defer></script>
 </head>
 <body>
@@ -23,12 +24,199 @@
 </header>
 <main>
   <section id="status" class="tab">
-    <h1>Status</h1>
-    <div class="card">
-      <p class="label">Admin service</p>
-      <p class="big" id="ping">Checking…</p>
+    <div class="status-header">
+      <h1>Status</h1>
+      <div class="status-actions">
+        <span id="status-updated" class="muted status-updated" aria-live="polite">updated --:--:--</span>
+        <button id="status-refresh" class="btn" type="button">Refresh</button>
+      </div>
     </div>
-    <p class="muted">Read-only. Nothing here can change the league.</p>
+
+    <div id="status-banner" class="card health-banner" role="status" aria-live="polite">
+      <div class="banner-head">
+        <span id="status-banner-icon" class="banner-icon" aria-hidden="true">●</span>
+        <div class="banner-body">
+          <p class="label">System health</p>
+          <p id="status-banner-title" class="big">Checking status…</p>
+        </div>
+      </div>
+      <ul id="status-reasons" class="reasons-list" hidden></ul>
+    </div>
+
+    <div class="status-stack">
+      <div class="card status-card" id="card-league">
+        <div class="card-head">
+          <h2 class="card-title">League app</h2>
+          <span id="league-badge" class="badge">Checking…</span>
+        </div>
+        <dl class="kv-grid">
+          <div>
+            <dt>Service</dt>
+            <dd id="league-status">—</dd>
+          </div>
+          <div>
+            <dt>Uptime</dt>
+            <dd id="league-uptime">—</dd>
+          </div>
+          <div>
+            <dt>Last restart</dt>
+            <dd id="league-restart">—</dd>
+          </div>
+          <div>
+            <dt>Version commit</dt>
+            <dd id="league-version">—</dd>
+          </div>
+        </dl>
+      </div>
+
+      <div class="card status-card" id="card-hub">
+        <div class="card-head">
+          <h2 class="card-title">Agent Hub</h2>
+          <span id="hub-badge" class="badge">Checking…</span>
+        </div>
+        <dl class="kv-grid">
+          <div>
+            <dt>Hub service</dt>
+            <dd id="hub-status">—</dd>
+          </div>
+          <div>
+            <dt>Admin service</dt>
+            <dd><span id="ping" class="big">Checking…</span></dd>
+          </div>
+        </dl>
+      </div>
+
+      <div class="card status-card" id="card-scheduler">
+        <div class="card-head">
+          <h2 class="card-title">Scheduler</h2>
+          <span id="scheduler-basis" class="muted"></span>
+        </div>
+        <p id="scheduler-error" class="muted" hidden></p>
+        <div class="table-scroll">
+          <table class="db-table status-table" id="scheduler-table">
+            <thead>
+              <tr>
+                <th>Job</th>
+                <th>Last run</th>
+                <th>Result</th>
+                <th>Next run</th>
+              </tr>
+            </thead>
+            <tbody id="scheduler-tbody">
+              <tr><td colspan="4" class="muted">Loading jobs…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card status-card" id="card-broker">
+        <div class="card-head">
+          <h2 class="card-title">Broker</h2>
+          <span id="broker-badge" class="badge">Checking…</span>
+        </div>
+        <dl class="kv-grid">
+          <div>
+            <dt>Alpaca</dt>
+            <dd id="broker-status">—</dd>
+          </div>
+          <div>
+            <dt>Last successful call</dt>
+            <dd id="broker-last-success">—</dd>
+          </div>
+          <div>
+            <dt>Market</dt>
+            <dd id="broker-market">—</dd>
+          </div>
+        </dl>
+      </div>
+
+      <div class="card status-card" id="card-agents">
+        <div class="card-head">
+          <h2 class="card-title">Agents</h2>
+        </div>
+        <p id="agents-error" class="muted" hidden></p>
+        <div class="table-scroll">
+          <table class="db-table status-table" id="agents-table">
+            <thead>
+              <tr>
+                <th>Agent</th>
+                <th>Last run</th>
+                <th>Result</th>
+                <th>Duration</th>
+              </tr>
+            </thead>
+            <tbody id="agents-tbody">
+              <tr><td colspan="4" class="muted">Loading agents…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card status-card" id="card-machine">
+        <div class="card-head">
+          <h2 class="card-title">Machine</h2>
+          <span id="machine-db-summary" class="muted"></span>
+        </div>
+        <div class="meter-list">
+          <div class="meter-row">
+            <div class="meter-head">
+              <span class="meter-name">CPU</span>
+              <span id="cpu-label" class="meter-val">—</span>
+            </div>
+            <div class="meter-track" role="progressbar" id="cpu-progress" aria-label="CPU usage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+              <div id="cpu-bar" class="meter-fill"></div>
+            </div>
+          </div>
+          <div class="meter-row">
+            <div class="meter-head">
+              <span class="meter-name">RAM</span>
+              <span id="ram-label" class="meter-val">—</span>
+            </div>
+            <div class="meter-track" role="progressbar" id="ram-progress" aria-label="RAM usage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+              <div id="ram-bar" class="meter-fill"></div>
+            </div>
+          </div>
+          <div class="meter-row">
+            <div class="meter-head">
+              <span class="meter-name">Disk</span>
+              <span id="disk-label" class="meter-val">—</span>
+            </div>
+            <div class="meter-track" role="progressbar" id="disk-progress" aria-label="Disk usage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+              <div id="disk-bar" class="meter-fill"></div>
+            </div>
+          </div>
+        </div>
+        <dl class="kv-grid kv-single">
+          <div>
+            <dt>Database size</dt>
+            <dd id="db-size">—</dd>
+          </div>
+        </dl>
+      </div>
+
+      <div class="card status-card" id="card-errors">
+        <div class="db-toolbar">
+          <div class="db-title-group">
+            <h2 class="card-title">Errors</h2>
+            <span id="logs-count" class="muted">Last 50 lines</span>
+          </div>
+          <div class="db-controls">
+            <select id="logs-service" class="db-select" aria-label="Filter errors by service">
+              <option value="all">All services</option>
+              <option value="league">League</option>
+              <option value="agents">Agents</option>
+              <option value="mirror/broker">Broker / Mirror</option>
+            </select>
+          </div>
+        </div>
+        <p id="logs-status" class="muted" hidden></p>
+        <div id="logs-list" class="logs-list" aria-live="polite">
+          <p class="muted">Loading error logs…</p>
+        </div>
+      </div>
+    </div>
+
+    <p class="muted status-footnote">Read-only. Nothing here can change the league.</p>
   </section>
   <section id="database" class="tab" hidden>
     <h1>Database</h1>

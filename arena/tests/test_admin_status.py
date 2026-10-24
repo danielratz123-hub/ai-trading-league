@@ -125,7 +125,8 @@ def test_get_only_and_no_store(setup, monkeypatch):
             assert getattr(client, method)('/admin/api/status').status_code == 405
 
 
-@pytest.mark.parametrize('uri', ['/admin', '/admin/', '/admin/api/status', '/admin/api/logs',
+@pytest.mark.parametrize('uri', ['/admin', '/admin/', '/admin/static/status.js',
+                                 '/admin/api/status', '/admin/api/logs',
                                  '/admin/api/logs?service=agents&limit=50'])
 def test_status_requires_proxy_login(server, uri):  # noqa: F811
     from pathlib import Path
@@ -139,6 +140,49 @@ def test_status_requires_proxy_login(server, uri):  # noqa: F811
     assert '@admin path /admin /admin/*' in caddy
     block = caddy.split('handle @admin {', 1)[1].split('reverse_proxy admin:8200', 1)[0]
     assert 'forward_auth api:8000' in block and 'uri /auth/check' in block
+
+
+def test_status_page_ui_assets(setup):
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    js_path = root / 'admin' / 'static' / 'status.js'
+    assert js_path.is_file()
+    js_text = js_path.read_text()
+    assert 'innerHTML' not in js_text
+    assert 'outerHTML' not in js_text
+    assert 'insertAdjacentHTML' not in js_text
+    assert 'textContent' in js_text
+    assert 'setInterval' in js_text and '30000' in js_text
+    assert '/admin/api/status' in js_text
+    assert '/admin/api/logs' in js_text
+    assert 'Admin cannot reach the status' in js_text
+    assert 'LATE' in js_text
+
+    with TestClient(create_app(setup[0])) as client:
+        html = client.get('/admin/').text
+        assert '<script src="/admin/static/status.js" defer></script>' in html
+        for elem_id in (
+            'status-banner', 'status-banner-icon', 'status-banner-title', 'status-reasons',
+            'status-updated', 'status-refresh',
+            'card-league', 'league-status', 'league-uptime', 'league-restart', 'league-version',
+            'card-hub', 'hub-status',
+            'card-scheduler', 'scheduler-tbody',
+            'card-broker', 'broker-status', 'broker-last-success', 'broker-market',
+            'card-agents', 'agents-tbody',
+            'card-machine', 'cpu-bar', 'ram-bar', 'disk-bar', 'db-size',
+            'card-errors', 'logs-service', 'logs-list',
+        ):
+            assert f'id="{elem_id}"' in html
+        res = client.get('/admin/static/status.js')
+        assert res.status_code == 200
+        assert 'innerHTML' not in res.text
+        assert 'setInterval' in res.text and '30000' in res.text
+
+    css_text = (root / 'admin' / 'static' / 'admin.css').read_text()
+    for selector in ('.health-banner', '.banner-green', '.banner-yellow', '.banner-red',
+                     '.meter-orange', '.meter-red', '.logs-list'):
+        assert selector in css_text
 
 
 def test_broker_errors_agent_failure_and_hub_down(setup):
