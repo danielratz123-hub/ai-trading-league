@@ -162,6 +162,9 @@ h2 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
 .rank { display: inline-flex; width: 32px; height: 32px; align-items: center; justify-content: center; border-radius: 50%; font-size: 13px; border: 1px solid rgba(255,255,255,0.14); color: var(--muted); }
 .rank.top { background: var(--ink); color: #000; border-color: var(--ink); }
 .agent-cell { display: inline-flex; align-items: center; gap: 10px; font-weight: 500; }
+.bench-row { color: var(--muted); }
+.bench-row .agent-cell { font-weight: 400; color: var(--muted); }
+.bench-tag { font-size: 10.5px; letter-spacing: 0.04em; padding: 2px 8px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.12); color: var(--faint); font-weight: 400; }
 .side { font-size: 11px; padding: 3px 10px; border-radius: 999px; white-space: nowrap; }
 .side.LONG { background: rgba(76,195,138,0.12); color: #7FD6A8; }
 .side.SHORT { background: rgba(242,112,122,0.12); color: #F2A0A6; }

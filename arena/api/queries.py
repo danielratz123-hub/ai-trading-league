@@ -250,6 +250,57 @@ def _first_trade_date(conn) -> str | None:
     return conn.execute("SELECT MIN(date) FROM snapshots WHERE kind='post_trade'").fetchone()[0]
 
 
+_BENCHMARK_LABELS = {
+    "bench_spy": "SPY buy-and-hold",
+    "bench_random": "Random picker",
+}
+
+
+def _agent_weekly_scores(conn, agent_id: str) -> tuple[float | None, float | None]:
+    try:
+        rows = conn.execute(
+            "SELECT score FROM weekly_scores WHERE agent_id=? AND score IS NOT NULL ORDER BY week_no",
+            (agent_id,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return None, None
+    if not rows:
+        return None, None
+    return _r(sum(r[0] for r in rows)), _r(rows[-1][0])
+
+
+def _benchmark_scoreboard(conn) -> list[dict]:
+    from .. import benchmarks
+    try:
+        has_any = conn.execute("SELECT 1 FROM benchmark_scores LIMIT 1").fetchone()
+    except sqlite3.OperationalError:
+        return []
+    if not has_any:
+        return []
+    out = []
+    for pid in benchmarks.PLAYER_IDS:
+        rows = conn.execute(
+            "SELECT return_pct, score FROM benchmark_scores WHERE player_id=? ORDER BY week_no",
+            (pid,),
+        ).fetchall()
+        rets = [r["return_pct"] / 100.0 for r in rows if r["return_pct"] is not None]
+        scores = [r["score"] for r in rows if r["score"] is not None]
+        cum_ret = _r(math.prod(1 + r for r in rets) - 1) if rets else None
+        last_ret = _r(rows[-1]["return_pct"] / 100.0) if rows and rows[-1]["return_pct"] is not None else None
+        last_score = _r(rows[-1]["score"]) if rows and rows[-1]["score"] is not None else None
+        total_score = _r(sum(scores)) if scores else None
+        out.append({
+            "player_id": pid,
+            "id": pid,
+            "label": _BENCHMARK_LABELS.get(pid, pid),
+            "total_score": total_score,
+            "cumulative_return": cum_ret,
+            "last_week_return": last_ret,
+            "last_week_score": last_score,
+        })
+    return out
+
+
 def scoreboard(conn) -> dict:
     d, fld = display_mark(conn)
     start = _first_trade_date(conn)
@@ -264,10 +315,14 @@ def scoreboard(conn) -> dict:
             row = {**row, **_open_values(conn, row["agent"], d)}
         perf = _performance(conn, row["agent"])
         since_start = perf[-1]["index"] - 1 if perf else None
+        total_score, last_week_score = _agent_weekly_scores(conn, row["agent"])
         rows.append({**{k: _r(v) if isinstance(v, float) else v for k, v in row.items()},
                      "return_since_start": _r(since_start),
-                     "vs_spy": _r(since_start - spy) if since_start is not None and spy is not None else None})
-    return {"as_of": d, "as_of_field": fld, "since": start, "spy_return": spy, "agents": rows}
+                     "vs_spy": _r(since_start - spy) if since_start is not None and spy is not None else None,
+                     "total_score": total_score,
+                     "last_week_score": last_week_score})
+    return {"as_of": d, "as_of_field": fld, "since": start, "spy_return": spy,
+            "agents": rows, "benchmarks": _benchmark_scoreboard(conn)}
 
 
 def _open_values(conn, agent_id: str, d: str) -> dict:

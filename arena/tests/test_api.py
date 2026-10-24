@@ -49,6 +49,59 @@ def test_status_scoreboard_and_noindex(client):
     assert sb["as_of"] == s["as_of"] and sb["spy_return"] is not None
     pts = {a["agent"]: a["points"] for a in sb["agents"]}
     assert sum(pts.values()) <= 5     # 5 scored weeks, ties give nobody a point
+    benches = sb["benchmarks"]
+    assert [b["player_id"] for b in benches] == ["bench_spy", "bench_random"]
+    assert [b["label"] for b in benches] == ["SPY buy-and-hold", "Random picker"]
+    for b in benches:
+        assert b["total_score"] is not None and b["cumulative_return"] is not None
+        assert b["last_week_return"] is not None and b["last_week_score"] is not None
+    for a in sb["agents"]:
+        assert "total_score" in a and "last_week_score" in a
+
+
+def test_scoreboard_benchmarks_before_and_after_scoring(tmp_path, monkeypatch):
+    import arena.api.app as app_module
+    from arena import ledger
+
+    db = tmp_path / "bench_api.db"
+    conn = connect(db)
+    df = _market()
+    conn.executemany("INSERT INTO prices VALUES (?,?,?,?,?,?,?)", df.itertuples(index=False))
+    store_days(conn, [(d, "09:30", "16:00") for d in sorted(df["date"].unique())])
+    ledger.create_agent(conn, "claude", 1000, "2024-01-02")
+    ledger.create_agent(conn, "gpt", 1000, "2024-01-02")
+    conn.close()
+
+    monkeypatch.setenv("ARENA_DB", str(db))
+    monkeypatch.setenv("LEARNING_ENABLED", "1")
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+    tc = TestClient(app_module.create_app())
+
+    # Before any scoring: benchmarks list is empty and agents have None scores.
+    sb0 = tc.get("/api/scoreboard").json()
+    assert sb0["benchmarks"] == []
+    assert all(a["total_score"] is None and a["last_week_score"] is None for a in sb0["agents"])
+
+    # Simulate 2 scored weeks (LEARNING_ENABLED=1 writes weekly_scores too).
+    conn = connect(db)
+    f = Factory({
+        "claude": [[[submit([manual(1, 0.5, {"AAPL": 0.5})])]]],
+        "gpt": [[[submit([manual(1, 0.5, {"SPY": 0.5})])]]],
+    })
+    league.simulate(conn, "2024-01-02", 2, factory=f, progress=lambda _: None)
+    conn.close()
+
+    sb1 = tc.get("/api/scoreboard").json()
+    assert [b["player_id"] for b in sb1["benchmarks"]] == ["bench_spy", "bench_random"]
+    assert [b["label"] for b in sb1["benchmarks"]] == ["SPY buy-and-hold", "Random picker"]
+    for b in sb1["benchmarks"]:
+        assert isinstance(b["total_score"], float)
+        assert isinstance(b["cumulative_return"], float)
+        assert isinstance(b["last_week_return"], float)
+        assert isinstance(b["last_week_score"], float)
+    for a in sb1["agents"]:
+        assert isinstance(a["total_score"], float)
+        assert isinstance(a["last_week_score"], float)
 
 
 def test_equity_curves_share_dates_and_index_ignores_deposits(client):
