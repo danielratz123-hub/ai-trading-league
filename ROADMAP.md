@@ -82,6 +82,7 @@ Make results meaningful before making agents smarter.
 ## Phase 3 — Website and control
 
 - [ ] **3.1 Admin panel (mobile-friendly, password + 2FA).** Pause/resume agents (kill switch), force a review, edit risk limits, view logs, alerts and health, trigger a backup.
+  > Status API done (#28): private GET-only service, heartbeat, schedule, agent and broker evidence with overall health and read-only Git version.
   > Database API done (#23): private GET-only table browsing, search, records and masked CSV exports through a read-only SQLite connection. Database browser UI done (#27): shortcuts, table list with row counts, paging, sorting, debounced search, pretty JSON record panel, and CSV export in `/admin#database`. The rest of 3.1 remains open.
 - [ ] **3.2 Live updates.** WebSockets (or SSE) so positions, P&L and agent activity update without refresh.
 - [ ] **3.3 Agent thought feed.** Live timeline of what each agent is analyzing, deciding and why (from the journal and debates).
