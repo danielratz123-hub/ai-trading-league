@@ -53,7 +53,8 @@ Protect the data and make the system survivable before adding features.
 
 Make results meaningful before making agents smarter.
 
-- [ ] **1.1 Benchmark competitors.** Add an "SPY buy-and-hold" player and a "random picker" player, scored on the same risk-adjusted weekly system as the agents.
+- [x] **1.1 Benchmark competitors.** Add an "SPY buy-and-hold" player and a "random picker" player, scored on the same risk-adjusted weekly system as the agents.
+  > Done. `arena/benchmarks.py` (`bench_spy` and `bench_random`, stored in `benchmark_scores` — never agents, so never mirrored or eligible for points/bonuses), exposed in `/api/scoreboard` (`arena/api/queries.py`) and shown as benchmark rows on the dashboard scoreboard (`arena/web/v3.js`). Tests: `test_benchmarks.py`, `test_api.py`.
 - [ ] **1.2 Proper stats per agent and per strategy.** Sharpe, Sortino, max drawdown, win rate, average win/loss, equity curve, all over weekly, monthly and all-time windows.
 - [ ] **1.3 Trade journal with predictions.** Before each trade the agent records: thesis, expected move, timeframe, confidence (0–100%). After the timeframe, the system scores it automatically. Track calibration (are 80% calls right ~80% of the time?).
 - [ ] **1.4 Strategy versioning.** Each strategy has a version number and a changelog entry (what changed, why, what evidence). Performance is tracked per version.

@@ -211,21 +211,48 @@
   function renderBoard() {
     const ex = D.ov?.leaderboard || { agents: {} };
     const start = D.ov?.starting_cash || 1000;
+    const fmtScore = (tot, last) => tot == null ? null : `Score ${tot.toFixed(2)}` + (last != null ? ` · last wk ${last.toFixed(2)}` : "");
     const rows = D.sb.agents.map(r => {
       const e = ex.agents[r.agent] || {};
-      return { id: r.agent, equity: liveEquity(r.agent) ?? r.equity, total: r.return_since_start, week: r.week_to_date,
+      const best = e.best_strategy ? `${e.best_strategy.name} · ${pct(e.best_strategy.return, 1)}` : null;
+      const sc = fmtScore(r.total_score, r.last_week_score);
+      return { id: r.agent, label: NAMES[r.id] || r.agent, isBench: false,
+               equity: liveEquity(r.agent) ?? r.equity, total: r.return_since_start, week: r.week_to_date,
                pts: String(r.points), win: e.win_rate == null ? "–" : ppct(e.win_rate, 0),
-               best: e.best_strategy ? `${e.best_strategy.name} · ${pct(e.best_strategy.return, 1)}` : "–" };
+               best: [best, sc].filter(Boolean).join(" · ") || "–" };
     });
-    rows.push({ id: "spy", equity: D.sb.spy_return == null ? null : start * (1 + D.sb.spy_return), total: D.sb.spy_return,
-                week: ex.spy_this_week, pts: "—", win: "—", best: "Buy and hold" });
     rows.sort((a, b) => (b.total ?? -9) - (a.total ?? -9));
-    $("board-body").innerHTML = rows.map((r, i) => `<tr>
-      <td class="pl"><span class="rank m ${i === 0 ? "top" : ""}">${i + 1}</span></td>
-      <td><span class="agent-cell">${sw(COLORS[r.id], r.id === "spy")}${NAMES[r.id] || esc(r.id)}</span></td>
-      <td class="r m">${money(r.equity)}</td><td class="r m ${cls(r.total)}">${pct(r.total)}</td>
-      <td class="r m ${cls(r.week)}">${pct(r.week)}</td><td class="r m">${esc(r.pts)}</td>
-      <td class="r m" style="color:var(--ink-2)">${esc(r.win)}</td><td class="pr" style="color:var(--muted)">${esc(r.best)}</td></tr>`).join("");
+    const benches = Array.isArray(D.sb.benchmarks) && D.sb.benchmarks.length ? D.sb.benchmarks : [
+      { player_id: "bench_spy", label: "SPY buy-and-hold", cumulative_return: D.sb.spy_return, last_week_return: ex.spy_this_week },
+      { player_id: "bench_random", label: "Random picker", cumulative_return: null, last_week_return: null }
+    ];
+    benches.forEach(b => {
+      const pid = b.player_id || b.id;
+      const isSpy = pid === "bench_spy";
+      const total = b.cumulative_return ?? (isSpy ? D.sb.spy_return : null);
+      const week = (isSpy ? ex.spy_this_week : null) ?? b.last_week_return;
+      rows.push({
+        id: pid, label: b.label || pid, isBench: true,
+        equity: total == null ? null : start * (1 + total),
+        total, week, pts: "", win: "—",
+        best: fmtScore(b.total_score, b.last_week_score) || (isSpy ? "Buy and hold" : "Equal-weight 5 stocks")
+      });
+    });
+    let agentIdx = 0;
+    $("board-body").innerHTML = rows.map(r => {
+      const rankHtml = r.isBench
+        ? `<span class="rank m">–</span>`
+        : `<span class="rank m ${agentIdx++ === 0 ? "top" : ""}">${agentIdx}</span>`;
+      const nameHtml = r.isBench
+        ? `<span class="agent-cell">${sw(COLORS.spy, true)}${esc(r.label)} <span class="bench-tag m">benchmark</span></span>`
+        : `<span class="agent-cell">${sw(COLORS[r.id])}${NAMES[r.id] || esc(r.id)}</span>`;
+      return `<tr class="${r.isBench ? "bench-row" : ""}">
+        <td class="pl">${rankHtml}</td>
+        <td>${nameHtml}</td>
+        <td class="r m">${money(r.equity)}</td><td class="r m ${cls(r.total)}">${pct(r.total)}</td>
+        <td class="r m ${cls(r.week)}">${pct(r.week)}</td><td class="r m">${esc(r.pts)}</td>
+        <td class="r m" style="color:var(--ink-2)">${esc(r.win)}</td><td class="pr" style="color:var(--muted)">${esc(r.best)}</td></tr>`;
+    }).join("");
     const o = D.ov;
     $("board-sub").textContent = o ? `1 point per weekly win · $${o.bonus_amount.toLocaleString()} bonus every ${o.bonus_every_weeks} weeks` : "";
   }
