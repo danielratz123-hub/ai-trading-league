@@ -8,6 +8,7 @@
 <title>Admin · ds</title>
 <link rel="stylesheet" href="/admin/static/admin.css">
 <script src="/admin/static/admin.js" defer></script>
+<script src="/admin/static/database.js" defer></script>
 </head>
 <body>
 <header class="bar">
@@ -31,7 +32,47 @@
   </section>
   <section id="database" class="tab" hidden>
     <h1>Database</h1>
-    <div class="card"><p class="muted">Coming soon.</p></div>
+    <div class="card db-card">
+      <p class="label">Shortcuts</p>
+      <div id="db-shortcuts" class="chip-row" aria-label="Shortcut tables"></div>
+      <p class="label db-section-label">All tables</p>
+      <div id="db-tables" class="table-grid" aria-label="All database tables">
+        <p class="muted">Loading tables…</p>
+      </div>
+    </div>
+    <div id="db-browser" class="card db-card" hidden>
+      <div class="db-toolbar">
+        <div class="db-title-group">
+          <h2 id="db-table-title" class="db-title"></h2>
+          <span id="db-table-total" class="muted"></span>
+        </div>
+        <div class="db-controls">
+          <input id="db-search" class="db-input" type="search" placeholder="Search text columns…" aria-label="Search table">
+          <a id="db-export" class="btn btn-orange" href="/admin/api/tables/trades/export.csv" download="export.csv">Export CSV</a>
+        </div>
+      </div>
+      <p id="db-status" class="muted" hidden></p>
+      <div class="table-scroll">
+        <table class="db-table" id="db-grid">
+          <thead id="db-thead"></thead>
+          <tbody id="db-tbody"></tbody>
+        </table>
+      </div>
+      <div class="db-pager">
+        <button id="db-prev" class="btn" type="button" disabled>Previous</button>
+        <span id="db-page-info" class="muted">page 1 of 1</span>
+        <button id="db-next" class="btn" type="button" disabled>Next</button>
+      </div>
+    </div>
+    <div id="db-modal-backdrop" class="modal-backdrop" hidden>
+      <div class="modal-panel card" role="dialog" aria-modal="true" aria-labelledby="db-record-title">
+        <div class="modal-header">
+          <h2 id="db-record-title" class="db-title">Record</h2>
+          <button id="db-modal-close" class="btn" type="button" aria-label="Close record">Close</button>
+        </div>
+        <div id="db-record-body" class="record-body"></div>
+      </div>
+    </div>
   </section>
 </main>
 </body>
