@@ -1,0 +1,56 @@
+/* Orange / white / black. Light by default; dark via the OS or the toggle. */
+:root {
+  color-scheme: light;
+  --bg: #f7f7f5; --card: #fff; --ink: #0b0b0b; --ink-2: #5a5955; --line: rgba(11,11,11,.10);
+  --orange: #ff7a1a; --orange-ink: #1a0b00; --good: #0a7a3d; --bad: #c93232;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #000; --card: #121212; --ink: #f7f7f5; --ink-2: #a9a9a4; --line: rgba(255,255,255,.12);
+    --good: #3dd68c; --bad: #ff5d5d;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #000; --card: #121212; --ink: #f7f7f5; --ink-2: #a9a9a4; --line: rgba(255,255,255,.12);
+  --good: #3dd68c; --bad: #ff5d5d;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 400 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+.bar {
+  position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px;
+  padding: 10px 16px; background: var(--bg); border-bottom: 1px solid var(--line);
+}
+.brand { display: flex; align-items: center; gap: 10px; color: inherit; text-decoration: none; font-weight: 700; }
+.mono {
+  display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 9px;
+  background: var(--orange); color: var(--orange-ink); font-weight: 800; letter-spacing: -.5px;
+}
+.nav { display: flex; gap: 4px; order: 3; width: 100%; }
+.nav a {
+  padding: 8px 14px; border-radius: 999px; color: var(--ink-2); text-decoration: none; font-weight: 600;
+}
+.nav a[aria-current="page"] { background: var(--ink); color: var(--bg); }
+.icon {
+  margin-left: auto; width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--line);
+  background: var(--card); color: var(--ink); font-size: 18px; cursor: pointer;
+}
+main { max-width: 960px; margin: 0 auto; padding: 20px 16px 64px; }
+h1 { font-size: 28px; letter-spacing: -.02em; margin: 8px 0 16px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 18px; }
+.label { margin: 0; font-size: 13px; color: var(--ink-2); text-transform: uppercase; letter-spacing: .06em; }
+.big { margin: 4px 0 0; font-size: 26px; font-weight: 700; }
+.big.ok { color: var(--good); } .big.bad { color: var(--bad); }
+.muted { color: var(--ink-2); }
+@media (min-width: 640px) {
+  .nav { order: 0; width: auto; }
+  .bar { flex-wrap: nowrap; }
+}

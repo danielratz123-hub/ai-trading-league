@@ -31,6 +31,15 @@
 		reverse_proxy hub:8100
 	}
 
+	# Admin site (compose profile "admin"): same login as the hub, read-only.
+	@admin path /admin /admin/*
+	handle @admin {
+		forward_auth api:8000 {
+			uri /auth/check
+		}
+		reverse_proxy admin:8200
+	}
+
 	handle {
 		# Overwrite whatever X-Forwarded-For a visitor sends, so the login rate
 		# limit sees the real address.

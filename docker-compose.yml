@@ -149,6 +149,34 @@ services:
       start_period: 30s
       retries: 3
 
+  # Admin site (/admin): read-only view of the league for Joe only. OFF unless
+  # .env has "admin" in COMPOSE_PROFILES. No docker socket, no env_file, no
+  # secrets; the data volume and the repo's .git are mounted read-only.
+  admin:
+    profiles: ["admin"]
+    build:
+      context: .
+      dockerfile: Dockerfile.admin
+      args:
+        APP_UID: ${APP_UID:-1000}
+    image: ai-trading-league-admin:latest
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    volumes:
+      - arena-data:/app/data:ro
+      - ./.git:/repo/.git:ro
+    networks: [web, default]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8200/admin/healthz', timeout=10)"]
+      interval: 60s
+      timeout: 15s
+      start_period: 30s
+      retries: 3
+
 networks:
   web:
 
