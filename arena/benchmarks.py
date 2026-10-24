@@ -8,40 +8,68 @@ see it, and it can never win the weekly point (score_week is untouched).
 `bench_spy` holds 100% SPY and never trades. Its week is the agents' week:
 SPY's open on exec_date to SPY's open on end_date (the mark), with the max
 drawdown taken over that open, every daily close in between, and the end open.
-Prices come from get_price at dates up to end_date only (no look-ahead).
+`bench_random` selects up to five tradable tickers using only decision-date
+history through ResearchContext, seeded by week number. It holds equal initial
+weights without costs. Missing endpoint prices are skipped; the original draw
+is saved as JSON, including any skipped tickers. Both players share the same
+portfolio valuation and scoring path.
 """
 from __future__ import annotations
 
+import json
+import random
 import sqlite3
+from datetime import date, timedelta
 
 from .db import log_event, transaction
 from .learning import scores
 from .prices import get_price
+from .tools.context import ResearchContext
 from .trading_calendar import trading_days
 
-# One entry per benchmark player; add a second player by adding an id here and
-# a path function to PATHS.
-PLAYER_IDS = ["bench_spy"]
+RANDOM_PICK_COUNT = 5
+PLAYER_IDS = ["bench_spy", "bench_random"]
 
 
-def _spy_path(conn: sqlite3.Connection, exec_date: str, end_date: str) -> list[float] | None:
-    """SPY value path of $1 held over the week; None if an open is missing."""
-    start = get_price(conn, "SPY", exec_date, "open")
-    end = get_price(conn, "SPY", end_date, "open")
-    if not start or not end:
+def _random_picks(conn: sqlite3.Connection, week_no: int, exec_date: str) -> list[str]:
+    week = conn.execute("SELECT decision_date FROM weeks WHERE week_no=?", (week_no,)).fetchone()
+    decision_date = week[0] if week else (date.fromisoformat(exec_date) - timedelta(days=1)).isoformat()
+    ctx = ResearchContext(conn, "bench_random", decision_date)
+    try:
+        closes = ctx.field("close")
+    except RuntimeError:  # no history available at the decision date
+        return []
+    eligible = sorted(t for t in ctx.universe if t in closes and closes[t].notna().any())
+    return random.Random(f"bench_random:{week_no}").sample(eligible, min(RANDOM_PICK_COUNT, len(eligible)))
+
+
+def _basket_path(conn: sqlite3.Connection, picks: list[str], exec_date: str,
+                 end_date: str) -> list[float] | None:
+    """Equal initial weights, fixed shares, no costs; omit missing endpoints.
+
+    Missing intermediate closes carry forward the last known value, keeping
+    portfolio weights intact when computing daily portfolio drawdown.
+    """
+    holdings = []
+    for ticker in picks:
+        start = get_price(conn, ticker, exec_date, "open")
+        end = get_price(conn, ticker, end_date, "open")
+        if start and end:
+            holdings.append((ticker, start, end))
+    if not holdings:
         return None
-    path = [start]
+    last = {t: start for t, start, _ in holdings}
+    path = [1.0]
     for d in trading_days(conn, exec_date, end_date):
         if d >= end_date:
-            break                                   # the end day's close is after the mark
-        close = get_price(conn, "SPY", d, "close")
-        if close:                                   # a missing bar is skipped
-            path.append(close)
-    path.append(end)
+            break
+        for t, _, _ in holdings:
+            close = get_price(conn, t, d, "close")
+            if close:
+                last[t] = close
+        path.append(sum(last[t] / start for t, start, _ in holdings) / len(holdings))
+    path.append(sum(end / start for _, start, end in holdings) / len(holdings))
     return path
-
-
-PATHS = {"bench_spy": _spy_path}
 
 
 def score_benchmarks(conn: sqlite3.Connection, week_no: int, exec_date: str, end_date: str) -> dict[str, dict]:
@@ -50,7 +78,8 @@ def score_benchmarks(conn: sqlite3.Connection, week_no: int, exec_date: str, end
     out = {}
     mode = scores.mode_for(week_no)
     for pid in PLAYER_IDS:
-        path = PATHS[pid](conn, exec_date, end_date)
+        picks = _random_picks(conn, week_no, exec_date) if pid == "bench_random" else ["SPY"]
+        path = _basket_path(conn, picks, exec_date, end_date)
         if path is None:
             log_event(conn, "warning", "benchmarks", f"week {week_no}: no prices for {pid}, not scored")
             continue
@@ -60,8 +89,9 @@ def score_benchmarks(conn: sqlite3.Connection, week_no: int, exec_date: str, end
         row = {"return_pct": ret_pct, "max_drawdown_pct": dd, "score": sc, "mode": mode}
         conn.execute(
             "INSERT OR REPLACE INTO benchmark_scores(week_no, player_id, week_start, return_pct, "
-            "max_drawdown_pct, score, mode) VALUES (?,?,?,?,?,?,?)",
-            (week_no, pid, exec_date, round(ret_pct, 6), round(dd, 6), round(sc, 6), mode))
+            "max_drawdown_pct, score, mode, picks) VALUES (?,?,?,?,?,?,?,?)",
+            (week_no, pid, exec_date, round(ret_pct, 6), round(dd, 6), round(sc, 6), mode,
+             json.dumps(picks) if pid == "bench_random" else None))
         out[pid] = row
     return out
 
