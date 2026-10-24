@@ -1,6 +1,8 @@
 """Benchmark players: bench_spy is scored like an agent but is never an agent."""
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from arena import benchmarks, league
@@ -65,7 +67,7 @@ def test_scoring_hook_leaves_agents_alone(conn, monkeypatch):
     counts = {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("trades", "pending_orders", "agents")}
     league._mark_and_score(conn, END)
     names = [r[0] for r in conn.execute("SELECT agent_id FROM agents ORDER BY agent_id")]
-    assert [r["player_id"] for r in conn.execute("SELECT player_id FROM benchmark_scores")] == ["bench_spy"]
+    assert [r["player_id"] for r in conn.execute("SELECT player_id FROM benchmark_scores ORDER BY player_id")] == ["bench_random", "bench_spy"]
     assert names == ["claude", "gpt"]
     assert [tuple(r) for r in conn.execute("SELECT * FROM agents")] == agents_before
     for t, n in counts.items():
@@ -85,7 +87,7 @@ def test_agent_points_identical_with_and_without_benchmarks(monkeypatch):
         league_week1(c, "claude")
         league_week1(c, "gpt", {1: ("w", 1.0, {"AAPL": 0.5, "SPY": 0.5})})
         set_price(c, "AAPL", END, 130)
-        monkeypatch.setattr(benchmarks, "PLAYER_IDS", ["bench_spy"] if enabled else [])
+        monkeypatch.setattr(benchmarks, "PLAYER_IDS", ["bench_spy", "bench_random"] if enabled else [])
         league._mark_and_score(c, END)
         results.append([tuple(r) for r in c.execute("SELECT week_no, agent_id, weekly_return, point FROM scores")])
         c.close()
@@ -97,7 +99,7 @@ def test_twice_gives_same_rows_and_backfill_is_repeatable(conn, monkeypatch):
     _league(conn)
     league._mark_and_score(conn, END)
     first = _rows(conn)
-    assert len(first) == 1
+    assert len(first) == 2
     benchmarks.score_benchmarks(conn, 1, EXEC, END)
     assert _rows(conn) == first
     conn.execute("DELETE FROM benchmark_scores")
@@ -111,6 +113,7 @@ def test_missing_price_does_not_crash_scoring(conn, monkeypatch):
     monkeypatch.delenv("LEARNING_ENABLED", raising=False)
     _league(conn)
     conn.execute("DELETE FROM prices WHERE ticker='SPY' AND date=?", (END,))
+    conn.execute("DELETE FROM prices WHERE date=?", (END,))
     assert benchmarks.score_benchmarks(conn, 1, EXEC, END) == {}
     league._mark_and_score(conn, END)                       # no SPY open at the mark -> skipped, no raise
     assert _rows(conn) == []
@@ -127,3 +130,58 @@ def test_benchmark_failure_never_breaks_scoring(conn, monkeypatch):
     league._mark_and_score(conn, END)
     assert conn.execute("SELECT COUNT(*) FROM scores").fetchone()[0] == 2
     assert conn.execute("SELECT COUNT(*) FROM events_log WHERE source='benchmarks' AND level='error'").fetchone()[0] == 1
+
+
+def test_random_picks_repeatable_and_week_specific(conn):
+    prices(conn)
+    first = benchmarks._random_picks(conn, 1, EXEC)
+    assert len(first) == benchmarks.RANDOM_PICK_COUNT
+    assert benchmarks._random_picks(conn, 1, EXEC) == first
+    assert benchmarks._random_picks(conn, 2, EXEC) != first
+    benchmarks.score_benchmarks(conn, 1, EXEC, END)
+    saved = conn.execute("SELECT picks FROM benchmark_scores WHERE player_id='bench_random'").fetchone()[0]
+    assert json.loads(saved) == first
+
+
+def test_random_selection_uses_only_decision_history(conn):
+    conn.execute("INSERT INTO weeks(week_no, decision_date, exec_date, status) VALUES (1, '2024-01-05', ?, 'executed')", (EXEC,))
+    set_price(conn, "AAPL", "2024-01-05", 100)
+    set_price(conn, "MSFT", EXEC, 100)  # first seen after the decision
+    set_price(conn, "NOT_TRADABLE", "2024-01-05", 100)
+    assert benchmarks._random_picks(conn, 1, EXEC) == ["AAPL"]
+    set_price(conn, "MSFT", END, 110)
+    assert benchmarks._random_picks(conn, 1, EXEC) == ["AAPL"]
+
+
+def test_random_equal_weight_return_drawdown_and_no_ledger_changes(conn, monkeypatch):
+    monkeypatch.setenv("LEARNING_ENABLED", "1")
+    for t, start, close, end in [("AAPL", 100, 80, 120), ("MSFT", 200, 200, 180)]:
+        set_price(conn, t, "2024-01-05", start)
+        set_price(conn, t, EXEC, start, close)
+        set_price(conn, t, END, end)
+    # Known at decision time, but missing an endpoint: skipped without replacement.
+    set_price(conn, "KO", "2024-01-05", 100)
+    set_price(conn, "KO", EXEC, 100)
+    before = {t: list(conn.execute(f"SELECT * FROM {t}")) for t in ("agents", "trades", "pending_orders")}
+    out = benchmarks.score_benchmarks(conn, 5, EXEC, END)["bench_random"]
+    assert out["return_pct"] == pytest.approx(5)
+    assert out["max_drawdown_pct"] == pytest.approx(10)
+    assert out["score"] == pytest.approx(0.5)
+    for t, rows in before.items():
+        assert list(conn.execute(f"SELECT * FROM {t}")) == rows
+
+
+def test_random_empty_universe_is_logged(conn):
+    assert benchmarks.score_benchmarks(conn, 1, EXEC, END) == {}
+    assert conn.execute("SELECT COUNT(*) FROM events_log WHERE message LIKE '%bench_random%'").fetchone()[0] == 1
+
+
+def test_picks_migration_preserves_existing_rows(conn):
+    from arena.db import _migrate
+    conn.execute("DROP TABLE benchmark_scores")
+    conn.execute("CREATE TABLE benchmark_scores (week_no INTEGER, player_id TEXT, week_start TEXT, return_pct REAL, max_drawdown_pct REAL, score REAL, mode TEXT, PRIMARY KEY(week_no, player_id))")
+    conn.execute("INSERT INTO benchmark_scores(week_no, player_id, score) VALUES (1, 'bench_spy', 2)")
+    _migrate(conn)
+    _migrate(conn)
+    row = conn.execute("SELECT * FROM benchmark_scores").fetchone()
+    assert row["score"] == 2 and row["picks"] is None

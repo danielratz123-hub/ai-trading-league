@@ -384,6 +384,7 @@ CREATE TABLE IF NOT EXISTS benchmark_scores (
     max_drawdown_pct REAL,
     score            REAL,
     mode             TEXT,
+    picks            TEXT,
     PRIMARY KEY (week_no, player_id)
 );
 
@@ -420,6 +421,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(trades)")}
     if "note" not in cols:
         conn.execute("ALTER TABLE trades ADD COLUMN note TEXT")
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(benchmark_scores)")}
+    if "picks" not in cols:
+        conn.execute("ALTER TABLE benchmark_scores ADD COLUMN picks TEXT")
     from .learning import schema as learning_schema
     learning_schema.migrate(conn)
 
