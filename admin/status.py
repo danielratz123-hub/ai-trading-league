@@ -4,7 +4,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import math
 import os
+from pathlib import Path
 import re
+import shutil
+import time
 from urllib.request import Request
 from zoneinfo import ZoneInfo
 
@@ -197,7 +200,51 @@ def broker(now):
             'market': 'open' if market_open else 'closed', 'evidence': 'database_only'}
 
 
-def collect(cfg=None, *, get=fetch, now=None):
+def machine(cfg, proc_dir=Path('/proc')):
+    """Host counters and data-volume usage; no container or host controls."""
+    def cpu_sample():
+        with (proc_dir / 'stat').open() as stream:
+            fields = stream.readline().split()
+        if fields[0] != 'cpu':
+            raise ValueError('Missing CPU counters')
+        counters = [int(n) for n in fields[1:9]]  # guest counters already in user/nice
+        return sum(counters), counters[3] + counters[4]
+
+    def cpu():
+        try:
+            first, idle = cpu_sample()
+            time.sleep(0.2)
+            last, idle_last = cpu_sample()
+            if last <= first:
+                raise ValueError('No CPU sample delta')
+            percent = 100 * (1 - (idle_last - idle) / (last - first))
+            return {'percent': max(0, min(100, percent)), 'basis': 'proc_stat'}
+        except (OSError, ValueError, IndexError):
+            return {'percent': os.getloadavg()[0] / (os.cpu_count() or 1) * 100,
+                    'basis': 'load_average'}
+
+    def ram():
+        with (proc_dir / 'meminfo').open() as stream:
+            values = {parts[0].rstrip(':'): int(parts[1]) * 1024
+                      for line in stream if len(parts := line.split()) >= 2}
+        total = values['MemTotal']
+        used = total - values['MemAvailable']
+        return {'used_bytes': used, 'total_bytes': total, 'percent': used / total * 100}
+
+    def disk():
+        usage = shutil.disk_usage(cfg.data_dir)
+        return {'used_bytes': usage.used, 'total_bytes': usage.total,
+                'percent': usage.used / usage.total * 100}
+
+    result = {name: guarded(fn) for name, fn in (('cpu', cpu), ('ram', ram), ('disk', disk))}
+    result['database'] = guarded(lambda: {'size_bytes': os.stat(cfg.data_dir / 'arena.db').st_size})
+    for name in ('cpu', 'ram', 'disk'):
+        result[name]['warn'] = result[name].get('percent', 0) > 80
+    result['warn'] = any(result[name]['warn'] for name in ('cpu', 'ram', 'disk'))
+    return result
+
+
+def collect(cfg=None, *, get=fetch, now=None, proc_dir=Path('/proc')):
     cfg = cfg or load()
     now = now or datetime.now(UTC)
     league = service(os.getenv('ADMIN_LEAGUE_URL', 'http://api:8000/healthz'), get)
@@ -206,8 +253,18 @@ def collect(cfg=None, *, get=fetch, now=None):
     result = {'league_app': league,
               'agent_hub': service(os.getenv('ADMIN_HUB_URL', 'http://hub:8100/hub/healthz'), get),
               'scheduler': guarded(lambda: scheduler(now)), 'agents': guarded(agents),
-              'broker': guarded(lambda: broker(now)), 'version': version(cfg.repo_git)}
+              'broker': guarded(lambda: broker(now)), 'version': version(cfg.repo_git),
+              'machine': machine(cfg, proc_dir)}
     red, yellow = [], []
+    for name, metric in result['machine'].items():
+        if not isinstance(metric, dict):
+            continue
+        if 'error' in metric:
+            yellow.append(f'{name} machine metric is unavailable')
+        if metric.get('warn'):
+            yellow.append(f'{name} usage is above 80%')
+    if result['machine']['disk'].get('percent', 0) > 95:
+        red.append('Disk usage is above 95%')
     if league['status'] == 'down':
         red.append('League app is down')
     if beat.get('error') or beat.get('heartbeat_stale'):

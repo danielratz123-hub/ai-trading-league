@@ -16,7 +16,20 @@ NOW = datetime(2026, 10, 20, 13, 0, tzinfo=timezone.utc)  # Tuesday before execu
 
 @pytest.fixture
 def setup(tmp_path, monkeypatch):
-    path = tmp_path / 'league.db'
+    path = tmp_path / 'arena.db'
+    # Existing health tests must not depend on the worker's CPU/RAM/disk load.
+    original_machine = status.machine
+    proc = tmp_path / 'proc'
+    proc.mkdir()
+    (proc / 'stat').write_text('cpu 10 0 0 90 0 0 0 0\n')
+    (proc / 'meminfo').write_text('MemTotal: 1000 kB\nMemAvailable: 800 kB\n')
+    monkeypatch.setattr(status.time, 'sleep', lambda seconds: (proc / 'stat').write_text(
+        'cpu 20 0 0 180 0 0 0 0\n'))
+    from collections import namedtuple
+    usage = namedtuple('usage', 'total used free')
+    monkeypatch.setattr(status.shutil, 'disk_usage', lambda path: usage(1000, 200, 800))
+    monkeypatch.setattr(status.os, 'getloadavg', lambda: (0.1, 0.1, 0.1))
+    monkeypatch.setattr(status, 'machine', lambda cfg, proc_dir: original_machine(cfg, proc))
     monkeypatch.setenv('ARENA_DB_PATH', str(path))
     cfg = Config('localhost', 8200, tmp_path, tmp_path / 'git')
     cfg.repo_git.mkdir()
@@ -112,12 +125,14 @@ def test_get_only_and_no_store(setup, monkeypatch):
             assert getattr(client, method)('/admin/api/status').status_code == 405
 
 
-def test_status_requires_proxy_login(server):  # noqa: F811
+@pytest.mark.parametrize('uri', ['/admin', '/admin/', '/admin/api/status', '/admin/api/logs',
+                                 '/admin/api/logs?service=agents&limit=50'])
+def test_status_requires_proxy_login(server, uri):  # noqa: F811
     from pathlib import Path
 
-    uri = '/admin/api/status'
     headers = {'X-Forwarded-Uri': uri}
-    assert server.get('/auth/check', headers=headers, follow_redirects=False).status_code == 401
+    response = server.get('/auth/check', headers=headers, follow_redirects=False)
+    assert response.status_code == (401 if '/api/' in uri else 303)
     login(server)
     assert server.get('/auth/check', headers=headers).status_code == 204
     caddy = (Path(__file__).resolve().parents[2] / 'Caddyfile').read_text()
@@ -187,3 +202,18 @@ def test_missing_db_does_not_create_file(setup, monkeypatch, tmp_path):
     assert result['agents'] == {'error': 'OperationalError'}
     assert result['broker'] == {'error': 'OperationalError'}
     assert not missing.exists()
+
+
+@pytest.mark.parametrize('metric,percent,colour', [
+    ('cpu', 80, 'green'), ('cpu', 81, 'yellow'), ('ram', 81, 'yellow'),
+    ('disk', 81, 'yellow'), ('disk', 95, 'yellow'), ('disk', 96, 'red'),
+])
+def test_machine_warnings_raise_overall_status(setup, monkeypatch, metric, percent, colour):
+    metrics = {name: {'percent': percent if name == metric else 10,
+                      'warn': name == metric and percent > 80}
+               for name in ('cpu', 'ram', 'disk')}
+    metrics['warn'] = percent > 80
+    monkeypatch.setattr(status, 'machine', lambda cfg, proc_dir: metrics)
+    result = status.collect(setup[0], get=fake_get, now=NOW)
+    assert result['machine'] == metrics
+    assert result['overall']['colour'] == colour
