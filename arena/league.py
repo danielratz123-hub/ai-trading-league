@@ -526,6 +526,12 @@ def _mark_and_score(conn, exec_date: str) -> tuple[int | None, dict[str, float],
     if prev is None:
         return None, {}, None
     rets = scoring.score_week(conn, prev["week_no"], prev["exec_date"], mark_ids)
+    try:                                        # benchmarks must never break scoring
+        from . import benchmarks
+        with transaction(conn):
+            benchmarks.score_benchmarks(conn, prev["week_no"], prev["exec_date"], exec_date)
+    except Exception as e:  # noqa: BLE001
+        log_event(conn, "error", "benchmarks", f"week {prev['week_no']}: {type(e).__name__}: {e}")
     winner = scoring.maybe_award_bonus(conn, prev["week_no"], exec_date)
     return prev["week_no"], rets, winner
 

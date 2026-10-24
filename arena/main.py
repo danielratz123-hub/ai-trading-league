@@ -32,6 +32,7 @@ League (times are US Eastern)
     health           quick check (database, disk; --scheduler: heartbeat too); exit 1 if unhealthy
     reports          write the weekly strategy reports for scored weeks that have none
                      (the scheduler does this after execute; --week N --force to redo one)
+    benchmarks-backfill  score the benchmark players (bench_spy) for every already-scored week
     refresh-universe download the current S&P 500 list (--source URL/CSV file; --date list date)
     backup           back up the database now (online backup API, compressed, uploaded if configured)
     backups          list the backups (local and remote)
@@ -581,6 +582,12 @@ def cmd_restore_backup(conn, args) -> None:
     print(f"Restored {name} to {args.to} (integrity check passed)")
 
 
+def cmd_benchmarks_backfill(conn, args) -> None:
+    from . import benchmarks
+    n = benchmarks.backfill_benchmarks(conn)
+    print(f"Benchmarks scored for {n} week(s).")
+
+
 def cmd_reconcile(conn, args) -> None:
     from . import alerts, mirror
     try:
@@ -847,6 +854,7 @@ COMMANDS = {
     "restore-backup": None,  # handled in main() before the database is opened
     "test-alert": cmd_test_alert,
     "reconcile": cmd_reconcile,
+    "benchmarks-backfill": cmd_benchmarks_backfill,
     "heartbeat": cmd_heartbeat,          # handled in main() before the database is opened
     "morning-report": cmd_morning_report,
     "staging": cmd_staging,

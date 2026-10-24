@@ -375,6 +375,18 @@ CREATE TABLE IF NOT EXISTS mirror_runs (
     orders    INTEGER NOT NULL
 );
 
+-- Benchmark players (arena/benchmarks.py). Not agents: no ledger, no orders.
+CREATE TABLE IF NOT EXISTS benchmark_scores (
+    week_no          INTEGER NOT NULL,
+    player_id        TEXT NOT NULL,
+    week_start       TEXT,
+    return_pct       REAL,
+    max_drawdown_pct REAL,
+    score            REAL,
+    mode             TEXT,
+    PRIMARY KEY (week_no, player_id)
+);
+
 CREATE TABLE IF NOT EXISTS events_log (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
     ts        TEXT NOT NULL DEFAULT (datetime('now')),
