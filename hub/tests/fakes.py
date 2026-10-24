@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from hub.agents import RunResult
-from hub.config import Config, DEFAULT_AGENTS
+from hub.config import Config, load_agents
 
 
 def iso(t: float) -> str:
@@ -15,7 +15,7 @@ def iso(t: float) -> str:
 def make_cfg(tmp_path: Path, **kw) -> Config:
     base = dict(repo="joe/league", token="tok", data_dir=tmp_path, max_rounds=2,
                 agent_timeout=60, check_timeout=60, review_timeout=600, poll_seconds=1,
-                agents={k: dict(v) for k, v in DEFAULT_AGENTS.items()})
+                agents=load_agents())
     base.update(kw)
     return Config(**base)
 
@@ -47,7 +47,8 @@ class FakeGitHub:
 
     def pr(self, n):
         p = self.prs[n]
-        return {"state": p["state"], "merged": p["merged"], "head": {"sha": p["head_sha"]}}
+        return {"state": p["state"], "merged": p["merged"], "head": {"sha": p["head_sha"]},
+                "merge_commit_sha": f"merge{n}" if p["merged"] else None}
 
     def comment(self, n, body):
         self.comments.append((n, body))
@@ -61,6 +62,10 @@ class FakeGitHub:
     def merge_pr(self, n, title):
         self.merged.append(n)
         self.prs[n]["merged"] = True
+        return f"merge{n}"
+
+    def delete_branch(self, branch):
+        self.deleted = getattr(self, "deleted", []) + [branch]
 
     def close_pr(self, n):
         self.closed.append(n)
@@ -143,6 +148,7 @@ class Agents:
 
     def run_agent(self, agent_cfg, prompt, cwd, log_path, timeout, should_stop):
         self.prompts.append(prompt)
+        self.cfgs = getattr(self, "cfgs", []) + [dict(agent_cfg)]
         role = "review" if "the REVIEWER" in prompt else "manager" if "the MANAGER" in prompt else "build"
         cli = agent_cfg["cmd"][0]
         self.calls.append((role, {"agy": "gemini"}.get(cli, cli)))     # agy = Gemini's CLI

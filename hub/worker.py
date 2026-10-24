@@ -45,6 +45,7 @@ class Worker:
         self.notify, self.clock = notify, clock
         self.wake = threading.Event()
         self.lock = threading.Lock()     # one state change at a time (worker vs. web)
+        self.current: dict | None = None  # what's running right now, for the page
 
     # ------------------------------------------------------------------ loop
 
@@ -74,6 +75,12 @@ class Worker:
                 self.poll(t)
             except Exception as e:  # noqa: BLE001 - GitHub hiccups: try again next pass
                 log.warning("poll of task %s failed: %s", t["id"], e)
+        for t in self.db.with_status("merged"):
+            if t.get("deploy") == "pending":
+                try:
+                    self.poll_deploy(t)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("deploy check of task %s failed: %s", t["id"], e)
         for t in self.db.with_status("reviewing"):
             if t["head_sha"] and t["review_sha"] != t["head_sha"]:
                 return self.run_review(t)
@@ -84,14 +91,55 @@ class Worker:
         if queued:
             return self.run(queued[0])
 
-    # ------------------------------------------------------------- helpers
+    # ------------------------------------------------------------- agents
 
     def label(self, agent: str) -> str:
         return self.cfg.agents.get(agent, {}).get("label", agent)
 
+    def agent_settings(self, key: str) -> dict:
+        """Joe's choices for an agent on the page: default model, effort, on/off."""
+        s = self.db.setting(f"agent:{key}", {}) or {}
+        return {"model": s.get("model", ""), "effort": s.get("effort", ""),
+                "enabled": s.get("enabled", True)}
+
+    def enabled(self) -> dict[str, dict]:
+        return {k: a for k, a in self.cfg.agents.items() if self.agent_settings(k)["enabled"]}
+
+    def model_for(self, key: str, override: str = "") -> str:
+        """The model a run uses: the task's choice, else the agent's default,
+        else "" (the CLI's own default)."""
+        return override or self.agent_settings(key)["model"]
+
+    def model_label(self, key: str, override: str = "") -> str:
+        m = self.model_for(key, override)
+        return f"{self.label(key)} ({m})" if m else self.label(key)
+
+    def _first(self, *keys: str) -> str:
+        for k in keys:
+            if k in self.cfg.agents:
+                return k
+        return next(iter(self.cfg.agents))
+
     def _reviewer(self, t: dict) -> str:
-        r = t.get("reviewer") or "claude"
-        return r if r in self.cfg.agents else "claude"
+        return self._first(t.get("reviewer") or "", "claude")
+
+    def _run(self, role: str, key: str, model: str, prompt: str, cwd: Path, log_path: Path,
+             should_stop: Callable[[], bool], title: str, task_id: int | None = None,
+             plan_id: int | None = None):
+        """Run one agent: with its model and effort, shown on the page while
+        it runs, and counted in the run log."""
+        a = dict(self.cfg.agents[key])
+        a["model"] = model
+        a["effort"] = self.agent_settings(key)["effort"]
+        self.current = {"role": role, "agent": key, "model": model, "title": title, "task_id": task_id,
+                        "plan_id": plan_id, "log": str(log_path), "started": self.clock()}
+        started = time.monotonic()
+        try:
+            result = self.run_agent(a, prompt, cwd, log_path, self.cfg.agent_timeout, should_stop)
+        finally:
+            self.current = None
+        self.db.add_run(key, model, role, task_id, plan_id, time.monotonic() - started, result.ok)
+        return result
 
     def _stopping(self, task_id: int) -> Callable[[], bool]:
         return lambda: bool((self.db.get(task_id) or {}).get("cancel"))
@@ -111,7 +159,8 @@ class Worker:
         tid, fixing = t["id"], bool(t["pr"])
         builder = self.label(t["agent"])
         self.db.update(tid, status="fixing" if fixing else "building", note=None)
-        self.db.event(tid, "start", f"{builder} {'fix round ' + str(t['round']) if fixing else 'starts building'}")
+        self.db.event(tid, "start", f"{self.model_label(t['agent'], t.get('model') or '')} "
+                                    f"{'fix round ' + str(t['round']) if fixing else 'starts building'}")
         repo = self.repo_factory(t)
         try:
             if not fixing:
@@ -129,9 +178,9 @@ class Worker:
                 repo.resume(t["branch"])
                 prompt = prompts.fix(builder, t, t["feedback"] or "", self.cfg.max_rounds)
 
-            result = self.run_agent(self.cfg.agents[t["agent"]], prompt, repo.path,
-                                    self.cfg.log_dir / f"task-{tid}-r{t['round']}.log",
-                                    self.cfg.agent_timeout, self._stopping(tid))
+            result = self._run("build" if not fixing else "fix", t["agent"], self.model_for(t["agent"], t.get("model") or ""),
+                               prompt, repo.path, self.cfg.log_dir / f"task-{tid}-r{t['round']}.log",
+                               self._stopping(tid), t["title"], task_id=tid)
             if result.stopped:
                 return self._cancelled(t)
             self.db.event(tid, "agent", result.tail[-4000:])
@@ -161,7 +210,8 @@ class Worker:
             head = repo.head()
             if not fixing:
                 pr = self.gh.create_pr(f"[{t['agent']}] {t['title']}", t["branch"], self.cfg.base_branch,
-                                       prompts.pr_body(t, builder, self.label(self._reviewer(t)),
+                                       prompts.pr_body(t, self.model_label(t["agent"], t.get("model") or ""),
+                                                       self.model_label(self._reviewer(t), t.get("reviewer_model") or ""),
                                                        summary, checks.ok))
                 self.db.update(tid, pr=pr)
                 self.db.event(tid, "pr", f"PR #{pr} opened")
@@ -181,20 +231,30 @@ class Worker:
     def _checks(self, t: dict, repo: Repo):
         tid = t["id"]
         log_path = self.cfg.log_dir / f"task-{tid}-r{t['round']}-checks.log"
-        checks = self.run_checks(repo.path, log_path, self.cfg.check_timeout, self._stopping(tid))
+
+        def run_checks():
+            self.current = {"role": "checks", "agent": t["agent"], "model": "", "title": t["title"],
+                            "task_id": tid, "plan_id": None, "log": str(log_path), "started": self.clock()}
+            try:
+                return self.run_checks(repo.path, log_path, self.cfg.check_timeout, self._stopping(tid))
+            finally:
+                self.current = None
+
+        checks = run_checks()
         tries = 0
         while not checks.ok and not checks.stopped and tries < 2:
             tries += 1
             self.db.event(tid, "checks", f"Checks failed, asking {self.label(t['agent'])} to fix them "
                                          f"(try {tries} of 2)\n{checks.tail[-2000:]}")
-            fix = self.run_agent(self.cfg.agents[t["agent"]], prompts.checks_failed(checks.tail),
-                                 repo.path, self.cfg.log_dir / f"task-{tid}-r{t['round']}-fix{tries}.log",
-                                 self.cfg.agent_timeout, self._stopping(tid))
+            fix = self._run("fix", t["agent"], self.model_for(t["agent"], t.get("model") or ""),
+                            prompts.checks_failed(checks.tail), repo.path,
+                            self.cfg.log_dir / f"task-{tid}-r{t['round']}-fix{tries}.log",
+                            self._stopping(tid), t["title"], task_id=tid)
             if fix.stopped:
                 checks.stopped = True
                 return checks
             repo.commit_all(f"{self.label(t['agent'])}: fix failing checks")
-            checks = self.run_checks(repo.path, log_path, self.cfg.check_timeout, self._stopping(tid))
+            checks = run_checks()
         self.db.event(tid, "checks", "Checks pass ✅" if checks.ok else "Checks still failing")
         return checks
 
@@ -221,7 +281,8 @@ class Worker:
         """The chosen reviewer reads the PR in a copy of its branch and gives a verdict."""
         tid = t["id"]
         rev = self._reviewer(t)
-        rev_label, builder = self.label(rev), self.label(t["agent"])
+        rev_model = self.model_for(rev, t.get("reviewer_model") or "")
+        rev_label, builder = self.model_label(rev, t.get("reviewer_model") or ""), self.label(t["agent"])
         self.db.event(tid, "review", f"{rev_label} is reviewing PR #{t['pr']}"
                       + (" (it also built it)" if rev == t["agent"] else ""))
         repo = self.repo_factory(t)
@@ -230,9 +291,10 @@ class Worker:
             head = repo.head()
             if head != t["head_sha"]:
                 self.db.update(tid, head_sha=head)
-            result = self.run_agent(self.cfg.agents[rev], prompts.review(rev_label, builder, t, self.cfg.base_branch),
-                                    repo.path, self.cfg.log_dir / f"task-{tid}-r{t['round']}-review.log",
-                                    self.cfg.agent_timeout, self._stopping(tid))
+            result = self._run("review", rev, rev_model,
+                               prompts.review(self.label(rev), builder, t, self.cfg.base_branch),
+                               repo.path, self.cfg.log_dir / f"task-{tid}-r{t['round']}-review.log",
+                               self._stopping(tid), t["title"], task_id=tid)
             repo.reset_to(head)                      # a reviewer never changes the branch
             if result.stopped:
                 return self._cancelled(t)
@@ -260,9 +322,7 @@ class Worker:
         tid = t["id"]
         pr = self.gh.pr(t["pr"])
         if pr.get("merged"):
-            self.db.update(tid, status="merged", note=None)
-            self.db.event(tid, "merged", f"PR #{t['pr']} merged")
-            self.repo_factory(t).remove()
+            self._merged(t, str(pr.get("merge_commit_sha") or ""), "merged")
             return self._after_merge(t)
         if pr.get("state") == "closed":
             self._stop(t, "cancelled", f"PR #{t['pr']} was closed", tell=False)
@@ -302,6 +362,35 @@ class Worker:
         self.db.event(tid, "fix", f"Fixes needed: starting round {t['round'] + 1}")
         self.wake.set()
 
+    def _merged(self, t: dict, sha: str, how: str) -> None:
+        """A PR got merged: watch its deploy, clean up the branch and work copy."""
+        self.db.update(t["id"], status="merged", note=None, merge_sha=sha or None,
+                       deploy="pending" if sha else None, merged_at=self.clock())
+        self.db.event(t["id"], "merged", f"PR #{t['pr']} {how}" + ("; deploying" if sha else ""))
+        self.repo_factory(t).remove()
+        try:
+            self.gh.delete_branch(t["branch"] or "")
+        except Exception as e:  # noqa: BLE001 - a leftover branch is harmless
+            log.warning("could not delete branch %s: %s", t["branch"], e)
+
+    def poll_deploy(self, t: dict) -> None:
+        """After a merge, CI on main tests and deploys to the VPS."""
+        state = review.deploy_state(self.gh.workflow_runs(t["merge_sha"]))
+        if state is None:
+            if self.clock() - (t.get("merged_at") or 0) > self.cfg.deploy_timeout:
+                self.db.update(t["id"], deploy="unknown")
+                self.db.event(t["id"], "deploy", "No deploy result after "
+                                                 f"{self.cfg.deploy_timeout // 60} min: check GitHub Actions")
+            return
+        self.db.update(t["id"], deploy=state)
+        if state == "success":
+            self.db.event(t["id"], "deployed", "✅ Live on the VPS")
+        else:
+            self.db.event(t["id"], "deploy", "Deploy failed. The league keeps running on the previous "
+                                             "version. Open GitHub Actions and press Re-run.")
+            self.notify(f"⚠️ Deploy of task #{t['id']} ({t['title']}) failed. The league runs on the "
+                        "previous version; re-run it in GitHub Actions.")
+
     def _after_merge(self, t: dict) -> None:
         """Start the next task of the plan, or finish the plan."""
         if not t.get("plan_id"):
@@ -323,25 +412,28 @@ class Worker:
 
     def run_manager(self, p: dict) -> None:
         pid = p["id"]
-        manager = p["manager"] if p["manager"] in self.cfg.agents else "claude"
+        manager = self._first(p["manager"], "claude")
+        team = self.enabled() or self.cfg.agents
         self.db.update_plan(pid, status="managing", note=None)
         repo = self.repo_factory({"plan": pid})
         log_path = self.cfg.log_dir / f"plan-{pid}.log"
         try:
             repo.fresh(f"plan-{pid}")                 # local only, never pushed
-            result = self.run_agent(self.cfg.agents[manager],
-                                    prompts.plan(self.label(manager), p["request"], self.cfg.agents, p),
-                                    repo.path, log_path, self.cfg.agent_timeout,
-                                    lambda: (self.db.plan(pid) or {}).get("status") == "cancelled")
+            result = self._run("manage", manager, self.model_for(manager, p.get("manager_model") or ""),
+                               prompts.plan(self.label(manager), p["request"], team, p),
+                               repo.path, log_path,
+                               lambda: (self.db.plan(pid) or {}).get("status") == "cancelled",
+                               p["request"].split("\n")[0][:120], plan_id=pid)
             if (self.db.plan(pid) or {}).get("status") == "cancelled":
                 return
             if not result.ok:
                 why = "ran out of time" if result.timed_out else f"stopped with an error (exit {result.exit_code})"
                 self.db.update_plan(pid, status="failed", note=f"The manager {why}.")
                 return
-            summary, tasks = review.parse_plan(self._full_log(log_path), self.cfg.agents, manager)
+            summary, tasks = review.parse_plan(self._full_log(log_path), team,
+                                               manager if manager in team else next(iter(team)))
             for task in tasks:
-                task["reviewer"] = p["reviewer"]
+                task["reviewer"] = p["reviewer"]      # the page warns if it's also the builder
             self.db.update_plan(pid, status="proposed", summary=summary, tasks_json=json.dumps(tasks),
                                 feedback=None, note=None)
             self.notify(f"📋 Plan #{pid} is ready for you to approve ({len(tasks)} tasks).")
@@ -369,9 +461,11 @@ class Worker:
                         task[key] = pick[key]
             for i, task in enumerate(tasks):
                 body = task["details"] + (f"\n\nPart of plan #{plan_id}: {p['request'][:500]}")
+                reviewer = task.get("reviewer") or p["reviewer"]
                 tid = self.db.create_task(task["title"], body, task["done_when"], task["builder"],
-                                          task.get("reviewer") or p["reviewer"], plan_id, i,
-                                          status="queued" if i == 0 else "waiting")
+                                          reviewer, plan_id, i, status="queued" if i == 0 else "waiting",
+                                          reviewer_model=(p.get("reviewer_model") or "")
+                                          if reviewer == p["reviewer"] else "")
                 self.db.event(tid, "created", f"Plan #{plan_id}, step {i + 1} of {len(tasks)}: "
                                               f"{self.label(task['builder'])} builds, "
                                               f"{self.label(task.get('reviewer') or p['reviewer'])} reviews")
@@ -439,10 +533,8 @@ class Worker:
             t = self.db.get(task_id)
             if not t or t["status"] != "ready":
                 return "Only a task marked ready can be merged here."
-            self.gh.merge_pr(t["pr"], f"[{t['agent']}] {t['title']} (#{t['pr']})")
-            self.db.update(task_id, status="merged", note=None)
-            self.db.event(task_id, "merged", f"PR #{t['pr']} merged from the hub; deploying")
-            self.repo_factory(t).remove()
+            sha = self.gh.merge_pr(t["pr"], f"[{t['agent']}] {t['title']} (#{t['pr']})")
+            self._merged(t, sha, "merged from the hub")
         self._after_merge(t)
         return None
 

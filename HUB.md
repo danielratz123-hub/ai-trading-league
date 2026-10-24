@@ -24,6 +24,49 @@ Nothing is built before you approve a plan. Any agent can take any role. If
 the builder and the reviewer are the same agent, the page warns you: a second
 opinion from another agent catches more.
 
+## The page
+
+- **Running now** at the top: which agent is working on what, with its live output.
+- Your work grouped as **Needs you** (plans to approve, stuck tasks), **Ready to merge**,
+  **Working** and **Done**. Every task has a progress rail:
+  Build → PR → Review → Ready → Merged → Live. Tap a task for its review, timeline and log.
+- After **Merge and deploy**, the task shows **Deploying…**, then **Live** (or **Deploy
+  failed**, with what to do). Wait for Live before running commands on the VPS yourself.
+- The chips at the top show how many runs each agent did today, so you can keep an eye on
+  your subscriptions' limits.
+
+## Models and effort
+
+Open **Agents** (top right). For each agent pick its default **model** and **effort**, or
+switch it off (it's then not offered for new work, including by managers). Model names
+are whatever the CLI accepts: Claude takes `opus`, `sonnet`, `haiku` or a full name;
+Gemini's **Find models** asks the Antigravity CLI for its list; for Codex type the name
+you see in the Codex app's model picker. "The CLI's own default" uses whatever that CLI
+picks. When you start a task or a plan you can also choose a model just for that one.
+
+## Add an agent
+
+Agents are listed in `hub/agents.yaml` (Claude, Codex, Gemini). To add one, for example
+a future CLI called `newagent`:
+
+1. **Install it** in `Dockerfile.hub`: one more `RUN` line, like the Antigravity one.
+2. **Describe it** in `hub/agents.yaml`:
+   ```yaml
+   newagent:
+     label: New Agent
+     color: "#3DD68C"
+     cmd: [newagent, -p, "{prompt}", --yes]   # how to run one task headless
+     model_args: [--model, "{model}"]         # how to choose a model (optional)
+     efforts: []                              # effort levels, if it has them
+   ```
+3. Merge (the hub can even build this PR for you), then sign it in once on the server:
+   `docker compose exec -it hub newagent` and press **Test agents**.
+
+Trying an agent on the server only, without a PR: put the same entry in
+`/hub/data/agents.yaml` inside the container. An entry like `codex: false` there hides
+an agent. Agents can't be added from the web page on purpose: anyone who stole your
+login could otherwise run any command on your server.
+
 ## What happens to a task
 
 1. The hub opens a GitHub issue, makes a fresh copy of the repo and a branch
@@ -131,9 +174,9 @@ agent gets a green dot (hover/tap shows the version). A red dot shows why
   from `.env` and `docker compose up -d --remove-orphans`).
 - **Logs:** `docker compose logs -f hub`. Each run's full output is also on the
   task's page ("Latest log").
-- **Change an agent's command** (e.g. a model flag): set `HUB_CMD_GEMINI` (or
-  `_CLAUDE`, `_CODEX`) in `hub.env` to a JSON list, with `"{prompt}"` where the
-  task goes, then `docker compose up -d hub`.
+- **Change an agent's command**: edit `hub/agents.yaml` (or, server only, set
+  `HUB_CMD_GEMINI` etc. in `hub.env` to a JSON list with `"{prompt}"` where the task goes).
+- **Old branches**: the hub deletes each task's `hub/` branch after its PR is merged.
 - Your last choices of builder, reviewer and manager are remembered in your browser.
 - **Limits:** `HUB_MAX_ROUNDS` (4), `HUB_AGENT_TIMEOUT` (45 min),
   `HUB_REVIEW_TIMEOUT` (40 min) in `hub.env`.

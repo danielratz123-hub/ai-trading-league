@@ -48,6 +48,22 @@ CREATE TABLE IF NOT EXISTS events (
     text     TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS events_task ON events(task_id, id);
+CREATE TABLE IF NOT EXISTS settings (
+    key    TEXT PRIMARY KEY,
+    value  TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS runs (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    at       REAL NOT NULL,
+    agent    TEXT NOT NULL,
+    model    TEXT NOT NULL DEFAULT '',
+    role     TEXT NOT NULL,
+    task_id  INTEGER,
+    plan_id  INTEGER,
+    seconds  REAL,
+    ok       INTEGER
+);
+CREATE INDEX IF NOT EXISTS runs_at ON runs(at);
 CREATE TABLE IF NOT EXISTS plans (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at  REAL NOT NULL,
@@ -65,11 +81,14 @@ CREATE TABLE IF NOT EXISTS plans (
 
 # Columns added after the first version (added to an existing database on start).
 TASK_COLUMNS = {"reviewer": "TEXT", "plan_id": "INTEGER", "plan_order": "INTEGER",
-                "review_sha": "TEXT", "review_verdict": "TEXT", "review_text": "TEXT"}
+                "review_sha": "TEXT", "review_verdict": "TEXT", "review_text": "TEXT",
+                "model": "TEXT", "reviewer_model": "TEXT", "merge_sha": "TEXT", "deploy": "TEXT",
+                "merged_at": "REAL"}
+PLAN_COLUMNS = {"manager_model": "TEXT", "reviewer_model": "TEXT"}
 
 FIELDS = {"title", "body", "done_when", "agent", "status", "issue", "branch", "pr", "round",
           "pushed_at", "head_sha", "feedback", "note", "cancel", *TASK_COLUMNS}
-PLAN_FIELDS = {"status", "summary", "tasks_json", "feedback", "note", "reviewer"}
+PLAN_FIELDS = {"status", "summary", "tasks_json", "feedback", "note", "reviewer", *PLAN_COLUMNS}
 
 
 class DB:
@@ -84,10 +103,11 @@ class DB:
         with self.lock:
             self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.executescript(SCHEMA)
-            have = {r["name"] for r in self.conn.execute("PRAGMA table_info(tasks)")}
-            for col, kind in TASK_COLUMNS.items():
-                if col not in have:
-                    self.conn.execute(f"ALTER TABLE tasks ADD COLUMN {col} {kind}")
+            for table, cols in (("tasks", TASK_COLUMNS), ("plans", PLAN_COLUMNS)):
+                have = {r["name"] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+                for col, kind in cols.items():
+                    if col not in have:
+                        self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {kind}")
 
     def _q(self, sql: str, args: tuple = ()) -> list[dict]:
         with self.lock:
@@ -97,13 +117,15 @@ class DB:
 
     def create_task(self, title: str, body: str, done_when: str, agent: str, reviewer: str | None = None,
                     plan_id: int | None = None, plan_order: int | None = None,
-                    status: str = "queued") -> int:
+                    status: str = "queued", model: str = "", reviewer_model: str = "") -> int:
         now = time.time()
         with self.lock:
             cur = self.conn.execute(
                 "INSERT INTO tasks (created_at, updated_at, title, body, done_when, agent, reviewer, "
-                "plan_id, plan_order, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (now, now, title, body, done_when, agent, reviewer or agent, plan_id, plan_order, status))
+                "plan_id, plan_order, status, model, reviewer_model) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (now, now, title, body, done_when, agent, reviewer or agent, plan_id, plan_order, status,
+                 model or "", reviewer_model or ""))
             return int(cur.lastrowid)
 
     def get(self, task_id: int) -> dict | None:
@@ -144,12 +166,14 @@ class DB:
 
     # Plans -------------------------------------------------------------------
 
-    def create_plan(self, request: str, manager: str, reviewer: str) -> int:
+    def create_plan(self, request: str, manager: str, reviewer: str, manager_model: str = "",
+                    reviewer_model: str = "") -> int:
         now = time.time()
         with self.lock:
             cur = self.conn.execute(
-                "INSERT INTO plans (created_at, updated_at, request, manager, reviewer) "
-                "VALUES (?, ?, ?, ?, ?)", (now, now, request, manager, reviewer))
+                "INSERT INTO plans (created_at, updated_at, request, manager, reviewer, manager_model, "
+                "reviewer_model) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (now, now, request, manager, reviewer, manager_model or "", reviewer_model or ""))
             return int(cur.lastrowid)
 
     def plan(self, plan_id: int) -> dict | None:
@@ -163,6 +187,34 @@ class DB:
         marks = ",".join("?" * len(statuses))
         return [_plan_row(r) for r in
                 self._q(f"SELECT * FROM plans WHERE status IN ({marks}) ORDER BY id", statuses)]
+
+    def setting(self, key: str, default=None):
+        rows = self._q("SELECT value FROM settings WHERE key = ?", (key,))
+        if not rows:
+            return default
+        try:
+            return json.loads(rows[0]["value"])
+        except json.JSONDecodeError:
+            return default
+
+    def set_setting(self, key: str, value) -> None:
+        with self.lock:
+            self.conn.execute("INSERT INTO settings (key, value) VALUES (?, ?) "
+                              "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                              (key, json.dumps(value)))
+
+    def add_run(self, agent: str, model: str, role: str, task_id: int | None, plan_id: int | None,
+                seconds: float, ok: bool) -> None:
+        with self.lock:
+            self.conn.execute("INSERT INTO runs (at, agent, model, role, task_id, plan_id, seconds, ok) "
+                              "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                              (time.time(), agent, model or "", role, task_id, plan_id, seconds, int(ok)))
+
+    def runs_since(self, since: float) -> dict[str, dict]:
+        """{agent: {"runs": n, "minutes": m}} since a time."""
+        rows = self._q("SELECT agent, COUNT(*) AS n, COALESCE(SUM(seconds), 0) AS s FROM runs "
+                       "WHERE at >= ? GROUP BY agent", (since,))
+        return {r["agent"]: {"runs": r["n"], "minutes": round(r["s"] / 60)} for r in rows}
 
     def update_plan(self, plan_id: int, **fields) -> None:
         bad = set(fields) - PLAN_FIELDS

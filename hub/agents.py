@@ -94,14 +94,45 @@ def _kill(proc: subprocess.Popen) -> None:
             continue
 
 
+def options(agent_cfg: dict, model: str = "", effort: str = "") -> list[str]:
+    """The model/effort flags for one run ("" = the CLI's own default)."""
+    out: list[str] = []
+    if model and agent_cfg.get("model_args"):
+        out += [part.replace("{model}", model) for part in agent_cfg["model_args"]]
+    if effort and effort in agent_cfg.get("efforts", []) and agent_cfg.get("effort_args"):
+        out += [part.replace("{effort}", effort) for part in agent_cfg["effort_args"]]
+    return out
+
+
 def agent_command(agent_cfg: dict, prompt: str) -> list[str]:
-    return [prompt if part == "{prompt}" else part for part in agent_cfg["cmd"]]
+    """The full command. agent_cfg may carry "model"/"effort" for this run;
+    their flags go where "{options}" is, or at the end. Each value is one
+    argument (no shell), so a model name can't add commands."""
+    opts = options(agent_cfg, agent_cfg.get("model", ""), agent_cfg.get("effort", ""))
+    cmd: list[str] = []
+    for part in agent_cfg["cmd"]:
+        if part == "{prompt}":
+            cmd.append(prompt)
+        elif part == "{options}":
+            cmd += opts
+            opts = []
+        else:
+            cmd.append(part)
+    return cmd + opts
 
 
 def run_agent(agent_cfg: dict, prompt: str, cwd: Path, log_path: Path, timeout: int,
               should_stop: Callable[[], bool] = lambda: False) -> RunResult:
     env = child_env(extra=tuple(agent_cfg.get("env_keys", ())))
     return run(agent_command(agent_cfg, prompt), cwd, log_path, timeout, env, should_stop)
+
+
+ANSI = __import__("re").compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\r")
+
+
+def clean_tail(path: Path, n: int = 3000) -> str:
+    """Log tail without terminal color codes, for the page."""
+    return ANSI.sub("", tail(path, n * 2))[-n:]
 
 
 def requirements_changed(cwd: Path) -> bool:
