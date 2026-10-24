@@ -133,8 +133,8 @@ def test_routes_are_get_only_and_no_write_sql():
 
 
 def test_new_routes_require_proxy_login(server):  # noqa: F811
-    paths = ['/admin', '/admin/', '/admin/static/admin.js', '/admin/api/tables',
-             '/admin/api/tables/trades', '/admin/api/tables/trades/rows/1',
+    paths = ['/admin', '/admin/', '/admin/static/admin.js', '/admin/static/database.js',
+             '/admin/api/tables', '/admin/api/tables/trades', '/admin/api/tables/trades/rows/1',
              '/admin/api/tables/trades/export.csv', '/admin/api/shortcuts']
     for path in paths:
         response = server.get('/auth/check', headers={'X-Forwarded-Uri': path}, follow_redirects=False)
@@ -146,6 +146,33 @@ def test_new_routes_require_proxy_login(server):  # noqa: F811
     assert '@admin path /admin /admin/*' in caddy
     block = caddy.split('handle @admin {', 1)[1].split('reverse_proxy admin:8200', 1)[0]
     assert 'forward_auth api:8000' in block and 'uri /auth/check' in block
+
+
+def test_database_browser_ui_assets(browser):
+    client, _ = browser
+    html = client.get('/admin/').text
+    assert '<script src="/admin/static/database.js" defer></script>' in html
+    assert 'Coming soon.' not in html
+    for elem_id in ('db-shortcuts', 'db-tables', 'db-browser', 'db-search',
+                    'db-export', 'db-prev', 'db-next', 'db-page-info', 'db-modal-backdrop'):
+        assert f'id="{elem_id}"' in html
+
+    js_path = ROOT / 'admin' / 'static' / 'database.js'
+    assert js_path.is_file()
+    js_text = js_path.read_text()
+    assert 'innerHTML' not in js_text
+    assert 'outerHTML' not in js_text
+    assert 'insertAdjacentHTML' not in js_text
+    assert 'textContent' in js_text
+    for endpoint in ('/admin/api/tables', '/admin/api/shortcuts', '/rows/', '/export.csv'):
+        assert endpoint in js_text
+
+    res = client.get('/admin/static/database.js')
+    assert res.status_code == 200 and 'innerHTML' not in res.text
+
+    css_text = (ROOT / 'admin' / 'static' / 'admin.css').read_text()
+    assert 'overflow-x: auto' in css_text
+    assert 'min-height: 44px' in css_text
 
 
 def test_csv_row_cap(browser):

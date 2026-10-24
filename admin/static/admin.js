@@ -13,7 +13,8 @@
   });
 
   function show() {
-    var tab = (location.hash || "#status").slice(1);
+    var raw = (location.hash || "#status").slice(1);
+    var tab = raw.split("/")[0];
     if (!document.getElementById(tab)) tab = "status";
     document.querySelectorAll(".tab").forEach(function (s) { s.hidden = s.id !== tab; });
     document.querySelectorAll(".nav a").forEach(function (a) {
