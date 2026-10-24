@@ -205,3 +205,28 @@ agent gets a green dot (hover/tap shows the version). A red dot shows why
 
 Use it for a few tasks a day; it runs the official CLIs on your own server for
 your own project, which is normal personal use of the subscriptions.
+
+## Admin site
+
+A private, read-only page for the server owner at `databasedstrategy.com/admin`.
+It uses the same login as `/hub` (Caddy checks `/auth/check` first), so nobody
+else can open it, and the public league site shows none of it.
+
+- **Status page** (`/admin#status`): one banner plus cards for the services,
+  scheduler, broker, agents, machine (CPU, RAM, disk, database size) and a
+  filterable error log. It refreshes every 30 seconds.
+- **Database page** (`/admin#database`): browse every table, search, sort, open
+  one record as pretty JSON, and download a CSV. Keys, tokens and passwords
+  show as `••••`.
+- **Colours:** green = all fine; yellow = something is late, unavailable or
+  above 80% usage, so take a look soon; red = something critical is down.
+- **Read-only:** the page has only GET routes, opens the database read-only,
+  has no `.env`, no Docker socket, and mounts the data and `.git` read-only.
+  It can't change anything.
+- **Turn it on:** add `admin` to `COMPOSE_PROFILES` in `.env` (for example
+  `COMPOSE_PROFILES=hub,admin`), then run `docker compose up -d --build`.
+  Turn it off with `docker compose stop admin`.
+- **When it is red:** read the reasons under the banner. Then check
+  `docker compose ps` and `docker compose logs --tail 100 <service>` for the
+  service named, and restart it with `docker compose restart <service>`. If the
+  league app itself is down, see DEPLOY.md.
