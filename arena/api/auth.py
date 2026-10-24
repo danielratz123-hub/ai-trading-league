@@ -264,13 +264,14 @@ def login(request: Request, password: str = Form(...), next: str = Form("/")):
 
 @router.get("/auth/check")
 def auth_check(request: Request) -> Response:
-    """Caddy asks this before passing a request to the Agent Hub (/hub):
+    """Caddy asks this before passing a request to the Agent Hub (/hub)
+    or the admin site (/admin):
     204 = signed in. Otherwise pages go to the login and API calls get 401.
     Caddy sends the original path in X-Forwarded-Uri."""
     if not login_enabled() or valid_session(request.cookies.get(COOKIE)):
         return Response(status_code=204)
     uri = request.headers.get("x-forwarded-uri", "/hub/")
-    if uri.startswith("/hub/api/"):
+    if uri.startswith(("/hub/api/", "/admin/api/")):
         return JSONResponse({"detail": "Not signed in."}, status_code=401)
     return RedirectResponse(f"/login?next={quote(_safe_next(uri))}", status_code=303)
 

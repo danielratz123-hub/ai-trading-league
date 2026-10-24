@@ -1,0 +1,16 @@
+# Admin site image (compose service "admin", profile "admin"). Tiny on purpose:
+# only the admin/ folder, no league code, no .env, no secrets.
+FROM python:3.14.3-slim-bookworm
+
+RUN pip install --no-cache-dir fastapi==0.142.4 uvicorn==0.54.0
+
+WORKDIR /app
+COPY admin ./admin
+
+ARG APP_UID=1000
+RUN useradd --create-home --uid ${APP_UID} admin
+USER admin
+ENV PYTHONUNBUFFERED=1 PYTHONPATH=/app
+
+EXPOSE 8200
+CMD ["python", "-m", "admin"]
