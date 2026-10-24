@@ -56,3 +56,11 @@ def test_admin_app_routes():
     page = c.get("/admin/")
     assert page.status_code == 200 and "Status" in page.text and "Database" in page.text
     assert c.post("/admin/api/ping").status_code == 405
+
+
+def test_admin_image_has_no_socket_or_copied_secrets():
+    text = (ROOT / "Dockerfile.admin").read_text()
+    code = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
+    assert "docker.sock" not in code and "env_file" not in code
+    assert not any(ln.startswith(("COPY", "ADD")) and (".env" in ln or "data" in ln)
+                   for ln in code.splitlines())

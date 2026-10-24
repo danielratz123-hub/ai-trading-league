@@ -86,6 +86,7 @@ Make results meaningful before making agents smarter.
   > Machine stats and error logs done (#31): CPU/RAM/data-volume/DB size, usage warnings, and bounded, masked warning/error logs filtered by service.
   > Status page UI done (#33): health banner, service/scheduler/broker/agent/machine cards, filterable error log, and 30s auto-refresh in `/admin#status`. The rest of 3.1 remains open.
   > Database API done (#23): private GET-only table browsing, search, records and masked CSV exports through a read-only SQLite connection. Database browser UI done (#27): shortcuts, table list with row counts, paging, sorting, debounced search, pretty JSON record panel, and CSV export in `/admin#database`. The rest of 3.1 remains open.
+  > Read-only admin site (status + database browser) is done (#35): security tests prove every route needs login, nothing can write, secrets are masked and the container is secret-free; documented in HUB.md. Still open: pause/resume, force review, risk limits, backup.
 - [ ] **3.2 Live updates.** WebSockets (or SSE) so positions, P&L and agent activity update without refresh.
 - [ ] **3.3 Agent thought feed.** Live timeline of what each agent is analyzing, deciding and why (from the journal and debates).
 - [ ] **3.4 Strategy leaderboard.** Rank all strategies across agents, not just agent vs agent.
