@@ -343,7 +343,7 @@ def test_models_reach_the_agents_and_runs_are_counted(tmp_path):
     assert "Review by Claude (opus)" in gh.comments[-1][1]
     usage = db.runs_since(0)
     assert usage["codex"]["runs"] == 1 and usage["claude"]["runs"] == 1
-    assert w.current is None
+    assert w.jobs == {}
 
 
 def test_current_run_is_visible_while_running(tmp_path):
@@ -352,13 +352,13 @@ def test_current_run_is_visible_while_running(tmp_path):
     orig = ag.run_agent
 
     def spy(*a, **k):
-        seen.append(dict(w.current))
+        seen.append(dict(next(iter(w.jobs.values()))))
         return orig(*a, **k)
     w.run_agent = spy
     tid = start(db)
     w.step()
     assert seen[0]["role"] == "build" and seen[0]["agent"] == "codex" and seen[0]["task_id"] == tid
-    assert w.current is None
+    assert w.jobs == {}
 
 
 def test_merge_tracks_the_deploy_and_deletes_the_branch(tmp_path):
@@ -400,3 +400,129 @@ def test_switched_off_agents_are_not_offered_to_the_manager(tmp_path):
     assert "`gemini`" not in ag.prompts[0]
     p = db.plans()[0]
     assert {t["builder"] for t in p["tasks"]} <= {"claude", "codex"}
+
+
+# ------------------------------------------------------------------ parallel, dependencies, auto-merge
+
+def test_independent_plan_steps_start_together_and_dependent_ones_wait(tmp_path):
+    from .fakes import PARALLEL_PLAN
+    w, db, gh, ag, clock, sent, repos = setup(tmp_path)
+    ag.plan_output = PARALLEL_PLAN
+    pid = db.create_plan("Stats for 1.2", "claude", "claude")
+    w.step()
+    p = db.plan(pid)
+    assert [t["after"] for t in p["tasks"]] == [[], [], [0]]
+    w.approve_plan(pid)
+    steps = db.plan_tasks(pid)
+    assert [t["status"] for t in steps] == ["queued", "queued", "waiting"]
+    assert db.after(steps[2]) == [steps[0]["id"]]
+    for _ in range(4):                               # both independent steps build and get reviewed
+        w.step()
+    assert db.get(steps[0]["id"])["pr"] and db.get(steps[1]["id"])["pr"]
+    assert db.get(steps[2]["id"])["status"] == "waiting"
+    gh.ci("success")
+    w.step()
+    assert {db.get(x["id"])["status"] for x in steps[:2]} == {"ready"}
+    w.merge(steps[1]["id"])                          # docs merged: step 3 still waits for step 1
+    assert db.get(steps[2]["id"])["status"] == "waiting"
+    w.merge(steps[0]["id"])
+    assert db.get(steps[2]["id"])["status"] == "queued"
+
+
+def test_plan_without_after_stays_one_by_one():
+    from hub import review as rv
+    from hub.config import load_agents
+    _, tasks = rv.parse_plan('BEGIN_PLAN {"tasks": [{"title": "a"}, {"title": "b"}, {"title": "c", "after": [9, 1, 3]}]} END_PLAN',
+                             load_agents(), "claude")
+    assert [t["after"] for t in tasks] == [[], [0], [0]]   # missing = previous; bad/forward refs dropped
+
+
+def test_threaded_dispatch_runs_different_agents_at_once_and_respects_the_limit(tmp_path):
+    import threading
+    w, db, gh, ag, clock, sent, repos = setup(tmp_path)
+    w.threaded = True
+    gate, started = threading.Event(), []
+
+    def slow(agent_cfg, prompt, *a, **k):
+        started.append(agent_cfg["cmd"][0])
+        gate.wait(5)
+        return ag.run_agent(agent_cfg, prompt, *a, **k)
+    w.run_agent = slow
+    db.create_task("A", "", "", "codex", "claude")
+    db.create_task("B", "", "", "codex", "claude")       # same agent: must wait
+    db.create_task("C", "", "", "gemini", "claude")
+    db.create_task("D", "", "", "claude", "codex")       # 3rd agent: over the limit of 2
+    w.room = lambda: "limit" if len(w.jobs) >= 2 else None
+    w.step()
+    for _ in range(50):
+        if len(started) >= 2:
+            break
+        threading.Event().wait(0.05)
+    assert sorted(started) == ["agy", "codex"] and len(w.jobs) == 2
+    gate.set()
+    for _ in range(100):
+        if not w.jobs:
+            break
+        threading.Event().wait(0.05)
+    assert w.jobs == {}
+
+
+def test_room_checks_the_limit_and_the_machine(tmp_path, monkeypatch):
+    import hub.worker as hw
+    w, db, gh, ag, clock, sent, repos = setup(tmp_path)
+    assert w.room() is None                               # nothing running: always room
+    w.jobs["x"] = {"agent": "codex"}
+    monkeypatch.setattr(hw.os, "getloadavg", lambda: (0.1, 0, 0))
+    monkeypatch.setattr(hw, "free_mb", lambda: 8000)
+    assert w.room() is None
+    monkeypatch.setattr(hw, "free_mb", lambda: 500)
+    assert "memory" in w.room()
+    monkeypatch.setattr(hw, "free_mb", lambda: 8000)
+    monkeypatch.setattr(hw.os, "getloadavg", lambda: (64.0, 0, 0))
+    assert "CPU" in w.room()
+    db.set_setting("max_parallel", 1)
+    assert w.room() == "limit"
+
+
+def test_conflict_with_main_goes_back_to_the_builder(tmp_path):
+    w, db, gh, ag, clock, sent, repos = setup(tmp_path)
+    tid = start(db)
+    build_and_review(w)
+    gh.ci("success")
+    w.step()
+    assert db.get(tid)["status"] == "ready"
+    pr = gh.prs[db.get(tid)["pr"]]
+    pr["mergeable"], pr["mergeable_state"] = False, "dirty"
+    w.step()                                            # sees the conflict, builder fixes it
+    assert "CONFLICT WITH MAIN" in [p for p in ag.prompts if "fix round" in p][-1]
+    assert db.get(tid)["status"] == "reviewing"
+
+
+def test_auto_merge_merges_when_green(tmp_path):
+    w, db, gh, ag, clock, sent, repos = setup(tmp_path)
+    tid = db.create_task("Stats", "", "", "codex", "claude", auto_merge=True)
+    build_and_review(w)
+    gh.ci("success")
+    w.step()
+    t = db.get(tid)
+    assert t["status"] == "merged" and t["deploy"] == "pending" and gh.merged == [t["pr"]]
+    assert any("merged automatically" in s for s in sent)
+
+
+def test_auto_merge_never_touches_protected_files(tmp_path):
+    w, db, gh, ag, clock, sent, repos = setup(tmp_path)
+    gh.files = ["arena/summary.py", "config/learning.yaml"]
+    tid = db.create_task("Stats", "", "", "codex", "claude", auto_merge=True)
+    build_and_review(w)
+    gh.ci("success")
+    w.step()
+    t = db.get(tid)
+    assert t["status"] == "ready" and not gh.merged and "config/learning.yaml" in t["note"]
+
+
+def test_auto_merge_comes_from_the_plan(tmp_path):
+    w, db, gh, ag, clock, sent, repos = setup(tmp_path)
+    pid = db.create_plan("Add an SPY benchmark", "claude", "codex", auto_merge=True)
+    w.step()
+    w.approve_plan(pid)
+    assert all(t["auto_merge"] for t in db.plan_tasks(pid))

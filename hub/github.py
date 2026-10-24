@@ -81,6 +81,15 @@ class GitHub:
             if "422" not in str(e) and "404" not in str(e):
                 raise
 
+    def pr_files(self, number: int) -> list[str]:
+        files: list[str] = []
+        for page in range(1, 11):
+            batch = self._call("GET", f"/pulls/{number}/files", params={"per_page": 100, "page": page})
+            files += [f.get("filename", "") for f in batch]
+            if len(batch) < 100:
+                break
+        return files
+
     def close_pr(self, number: int) -> None:
         self._call("PATCH", f"/pulls/{number}", json={"state": "closed"})
 

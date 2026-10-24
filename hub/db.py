@@ -83,8 +83,8 @@ CREATE TABLE IF NOT EXISTS plans (
 TASK_COLUMNS = {"reviewer": "TEXT", "plan_id": "INTEGER", "plan_order": "INTEGER",
                 "review_sha": "TEXT", "review_verdict": "TEXT", "review_text": "TEXT",
                 "model": "TEXT", "reviewer_model": "TEXT", "merge_sha": "TEXT", "deploy": "TEXT",
-                "merged_at": "REAL"}
-PLAN_COLUMNS = {"manager_model": "TEXT", "reviewer_model": "TEXT"}
+                "merged_at": "REAL", "after_json": "TEXT", "auto_merge": "INTEGER"}
+PLAN_COLUMNS = {"manager_model": "TEXT", "reviewer_model": "TEXT", "auto_merge": "INTEGER"}
 
 FIELDS = {"title", "body", "done_when", "agent", "status", "issue", "branch", "pr", "round",
           "pushed_at", "head_sha", "feedback", "note", "cancel", *TASK_COLUMNS}
@@ -117,20 +117,29 @@ class DB:
 
     def create_task(self, title: str, body: str, done_when: str, agent: str, reviewer: str | None = None,
                     plan_id: int | None = None, plan_order: int | None = None,
-                    status: str = "queued", model: str = "", reviewer_model: str = "") -> int:
+                    status: str = "queued", model: str = "", reviewer_model: str = "",
+                    after: list[int] | None = None, auto_merge: bool = False) -> int:
         now = time.time()
         with self.lock:
             cur = self.conn.execute(
                 "INSERT INTO tasks (created_at, updated_at, title, body, done_when, agent, reviewer, "
-                "plan_id, plan_order, status, model, reviewer_model) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "plan_id, plan_order, status, model, reviewer_model, after_json, auto_merge) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (now, now, title, body, done_when, agent, reviewer or agent, plan_id, plan_order, status,
-                 model or "", reviewer_model or ""))
+                 model or "", reviewer_model or "", json.dumps(after or []), int(bool(auto_merge))))
             return int(cur.lastrowid)
 
     def get(self, task_id: int) -> dict | None:
         rows = self._q("SELECT * FROM tasks WHERE id = ?", (task_id,))
         return rows[0] if rows else None
+
+    @staticmethod
+    def after(task: dict) -> list[int]:
+        """The task ids this task waits for (plan steps it builds on)."""
+        try:
+            return [int(x) for x in json.loads(task.get("after_json") or "[]")]
+        except (ValueError, TypeError):
+            return []
 
     def list(self, limit: int = 50) -> list[dict]:
         return self._q("SELECT * FROM tasks ORDER BY id DESC LIMIT ?", (limit,))
@@ -167,13 +176,14 @@ class DB:
     # Plans -------------------------------------------------------------------
 
     def create_plan(self, request: str, manager: str, reviewer: str, manager_model: str = "",
-                    reviewer_model: str = "") -> int:
+                    reviewer_model: str = "", auto_merge: bool = False) -> int:
         now = time.time()
         with self.lock:
             cur = self.conn.execute(
                 "INSERT INTO plans (created_at, updated_at, request, manager, reviewer, manager_model, "
-                "reviewer_model) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (now, now, request, manager, reviewer, manager_model or "", reviewer_model or ""))
+                "reviewer_model, auto_merge) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (now, now, request, manager, reviewer, manager_model or "", reviewer_model or "",
+                 int(bool(auto_merge))))
             return int(cur.lastrowid)
 
     def plan(self, plan_id: int) -> dict | None:

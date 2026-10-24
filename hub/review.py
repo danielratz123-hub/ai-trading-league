@@ -74,18 +74,33 @@ def parse_plan(output: str, agents: dict, fallback_builder: str) -> tuple[str, l
     tasks_in = data.get("tasks") if isinstance(data, dict) else None
     if not isinstance(tasks_in, list) or not tasks_in:
         raise PlanError("The plan has no tasks.")
-    tasks = []
-    for item in tasks_in[:MAX_PLAN_TASKS]:
+    kept: list[tuple[int, dict]] = []          # (step number the manager used, task)
+    for n, item in enumerate(tasks_in[:MAX_PLAN_TASKS], start=1):
         if not isinstance(item, dict) or not str(item.get("title", "")).strip():
             continue
         builder = str(item.get("builder", "")).strip().lower()
-        tasks.append({
+        kept.append((n, {
             "title": str(item["title"]).strip()[:200],
             "details": str(item.get("details", "")).strip()[:8000],
             "done_when": str(item.get("done_when", "")).strip()[:2000],
             "builder": builder if builder in agents else fallback_builder,
             "why": str(item.get("why", "")).strip()[:500],
-        })
-    if not tasks:
+            "_after": item.get("after", None),
+        }))
+    if not kept:
         raise PlanError("The plan has no usable tasks.")
+    # "after": the earlier steps a step needs merged first. Missing = the step
+    # just before it (the safe, one-by-one default). Renumbered to our order.
+    position = {n: i for i, (n, _) in enumerate(kept)}
+    tasks = []
+    for i, (n, task) in enumerate(kept):
+        raw = task.pop("_after")
+        if raw is None:
+            after = [i - 1] if i else []
+        else:
+            nums = raw if isinstance(raw, list) else [raw]
+            after = sorted({position[int(x)] for x in nums
+                            if str(x).lstrip("-").isdigit() and int(x) in position and position[int(x)] < i})
+        task["after"] = after                  # 0-based indexes of earlier steps
+        tasks.append(task)
     return str(data.get("summary", "")).strip()[:3000], tasks

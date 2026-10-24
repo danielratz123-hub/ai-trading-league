@@ -22,7 +22,7 @@ def main() -> None:
     worker = None
     if cfg.configured:
         worker = Worker(cfg, db, GitHub(cfg.repo, cfg.token),
-                        notify=Telegram(cfg.telegram_token, cfg.telegram_chat))
+                        notify=Telegram(cfg.telegram_token, cfg.telegram_chat), threaded=True)
         threading.Thread(target=worker.forever, daemon=True, name="hub-worker").start()
     else:
         logging.getLogger("hub").warning("HUB_REPO / HUB_GITHUB_TOKEN missing: page only, no worker")

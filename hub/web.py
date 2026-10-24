@@ -38,6 +38,7 @@ class NewTask(BaseModel):
     reviewer: str = "claude"
     model: str = ""
     reviewer_model: str = ""
+    auto_merge: bool = False
     _check = field_validator("model", "reviewer_model")(_model)
 
 
@@ -47,7 +48,12 @@ class NewPlan(BaseModel):
     reviewer: str = "claude"
     manager_model: str = ""
     reviewer_model: str = ""
+    auto_merge: bool = False
     _check = field_validator("manager_model", "reviewer_model")(_model)
+
+
+class HubSettings(BaseModel):
+    max_parallel: int = Field(ge=1, le=3)
 
 
 class AgentSettings(BaseModel):
@@ -83,7 +89,8 @@ def public(t: dict, repo: str) -> dict:
     out = {k: t.get(k) for k in ("id", "title", "body", "done_when", "agent", "reviewer", "status",
                                  "issue", "branch", "pr", "round", "note", "plan_id", "plan_order",
                                  "review_verdict", "model", "reviewer_model", "deploy", "merged_at",
-                                 "created_at", "updated_at")}
+                                 "auto_merge", "created_at", "updated_at")}
+    out["after"] = DB.after(t)
     base = f"https://github.com/{repo}"
     out["issue_url"] = f"{base}/issues/{t['issue']}" if t["issue"] else None
     out["pr_url"] = f"{base}/pull/{t['pr']}" if t["pr"] else None
@@ -92,8 +99,8 @@ def public(t: dict, repo: str) -> dict:
 
 def public_plan(p: dict) -> dict:
     return {k: p.get(k) for k in ("id", "request", "manager", "reviewer", "manager_model",
-                                  "reviewer_model", "status", "summary", "tasks", "feedback", "note",
-                                  "created_at", "updated_at")}
+                                  "reviewer_model", "auto_merge", "status", "summary", "tasks", "feedback",
+                                  "note", "created_at", "updated_at")}
 
 
 def today_start() -> float:
@@ -119,13 +126,15 @@ def create_app(cfg: Config, db: DB, worker: Worker | None) -> FastAPI:
         if not settings(key)["enabled"]:
             raise HTTPException(400, f"{cfg.agents[key]['label']} is switched off (Agents panel).")
 
-    def running() -> dict | None:
-        cur = worker.current if worker is not None else None
-        if not cur:
-            return None
-        return {**{k: v for k, v in cur.items() if k != "log"},
-                "label": cfg.agents.get(cur["agent"], {}).get("label", cur["agent"]),
-                "log": clean_tail(Path(cur["log"]), 2500)}
+    def running() -> list[dict]:
+        if worker is None:
+            return []
+        with worker.jobs_lock:
+            jobs = [dict(j, key=k) for k, j in worker.jobs.items()]
+        return [{**{k: v for k, v in j.items() if k != "log"},
+                 "label": cfg.agents.get(j["agent"], {}).get("label", j["agent"]),
+                 "log": clean_tail(Path(j["log"]), 2500) if j.get("log") else ""}
+                for j in sorted(jobs, key=lambda j: j.get("started") or 0)]
 
     def need_worker() -> Worker:
         if worker is None or not cfg.configured:
@@ -164,6 +173,8 @@ def create_app(cfg: Config, db: DB, worker: Worker | None) -> FastAPI:
                         "today": usage.get(k, {"runs": 0, "minutes": 0}), "test": agent_tests.get(k)}
                        for k, v in cfg.agents.items() for usage in [db.runs_since(today_start())]],
             "running": running(),
+            "max_parallel": worker.max_parallel() if worker else cfg.max_parallel,
+            "held_back": (worker.room() if worker and worker.jobs and worker.waiting_jobs() else None),
             "tasks": [public(t, cfg.repo) for t in db.list(50)],
             "plans": [public_plan(p) for p in db.plans(20)],
         }
@@ -180,7 +191,8 @@ def create_app(cfg: Config, db: DB, worker: Worker | None) -> FastAPI:
         agent_or_400(body.agent, "builder")
         agent_or_400(body.reviewer, "reviewer")
         tid = db.create_task(body.title.strip(), body.body.strip(), body.done_when.strip(), body.agent,
-                             body.reviewer, model=body.model, reviewer_model=body.reviewer_model)
+                             body.reviewer, model=body.model, reviewer_model=body.reviewer_model,
+                             auto_merge=body.auto_merge)
         db.event(tid, "created", f"{w.model_label(body.agent, body.model)} builds, "
                                  f"{w.model_label(body.reviewer, body.reviewer_model)} reviews")
         w.wake.set()
@@ -192,7 +204,7 @@ def create_app(cfg: Config, db: DB, worker: Worker | None) -> FastAPI:
         agent_or_400(body.manager, "manager")
         agent_or_400(body.reviewer, "reviewer")
         pid = db.create_plan(body.request.strip(), body.manager, body.reviewer, body.manager_model,
-                             body.reviewer_model)
+                             body.reviewer_model, auto_merge=body.auto_merge)
         w.wake.set()
         return {"id": pid}
 
@@ -257,6 +269,13 @@ def create_app(cfg: Config, db: DB, worker: Worker | None) -> FastAPI:
             return JSONResponse({"detail": f"GitHub refused the merge: {e}"}, status_code=409)
         if err:
             raise HTTPException(409, err)
+        return {"ok": True}
+
+    @app.post("/hub/api/settings", dependencies=[Depends(same_site)])
+    def save_settings(body: HubSettings):
+        db.set_setting("max_parallel", body.max_parallel)
+        if worker is not None:
+            worker.wake.set()
         return {"ok": True}
 
     @app.post("/hub/api/agents/{key}", dependencies=[Depends(same_site)])

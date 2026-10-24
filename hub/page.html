@@ -73,8 +73,10 @@ h1 { margin: 0; font-size: 26px; line-height: 1.05; font-weight: 800; }
 .notice.bad { border: 1px solid rgba(255,93,93,.35); color: #FF9A9A; word-break: break-word; }
 
 /* ------------------------------------------------------------- now running */
+.nowlist { display: grid; gap: 10px; margin-bottom: 18px; }
+.nowlist .held { font-size: 13px; color: var(--steel); padding: 0 4px; }
 .now { position: relative; border-radius: 20px; background: var(--raise); border: 1px solid var(--line);
-  padding: 16px 18px 16px 24px; margin-bottom: 18px; overflow: hidden; }
+  padding: 16px 18px 16px 24px; overflow: hidden; }
 .now::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: var(--agent, var(--orange)); }
 .now-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .now-head strong { font-size: 18px; }
@@ -114,6 +116,11 @@ select { appearance: none; padding-right: 32px; cursor: pointer;
 .model-row select, .model-row input { font-size: 13px; padding: 7px 10px; border-radius: 10px; }
 .model-row input { flex: 1; }
 .selfwarn { margin-top: 8px; font-size: 13px; color: var(--wait); }
+.check { display: flex; gap: 10px; align-items: flex-start; margin-top: 16px; font-size: 14px; cursor: pointer; }
+.check input { width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--orange); flex: none; }
+.check .hint { display: block; font-size: 13px; }
+.tag-auto { font-size: 12px; color: var(--orange); border: 1px solid rgba(255,122,26,.45); border-radius: 999px; padding: 1px 8px; }
+.waits { font-size: 13px; color: var(--steel); margin-top: 6px; }
 .formmsg { margin-top: 10px; font-size: 14px; min-height: 1em; }
 .formmsg.err { color: #FF9A9A; } .formmsg.ok { color: var(--ready); }
 
@@ -223,7 +230,7 @@ dialog::backdrop { background: rgba(0,0,0,.72); }
     <code>HUB_GITHUB_TOKEN</code> to <code>hub.env</code> on the server (HUB.md, step 3).</div>
   <div id="agenterr"></div>
 
-  <section class="now" id="now" hidden aria-live="polite"></section>
+  <div class="nowlist" id="now" hidden aria-live="polite"></div>
 
   <div class="grid">
     <form class="panel" id="new" autocomplete="off">
@@ -249,6 +256,9 @@ dialog::backdrop { background: rgba(0,0,0,.72); }
         <label class="f" for="request">What do you want? <span class="hint">the manager splits it into tasks</span></label>
         <textarea id="request" style="min-height:150px" placeholder="Do ROADMAP item 1.2: Sharpe, Sortino and max drawdown per agent and per strategy, shown on the dashboard"></textarea>
       </div>
+      <label class="check"><input type="checkbox" id="automerge">
+        <span>Merge and deploy by itself when the review is ✅ and the tests pass
+          <span class="hint">Off = you press Merge. Never automatic for deploy, login or risk-limit files.</span></span></label>
       <div class="actions"><button class="btn go" id="start" type="submit">Start the task</button></div>
       <div class="formmsg" id="newmsg" role="status"></div>
     </form>
@@ -263,7 +273,13 @@ dialog::backdrop { background: rgba(0,0,0,.72); }
       <h2 class="wide" id="agents-title">Agents</h2>
       <button class="btn sm quiet" id="close-agents">Close</button>
     </div>
-    <div class="steel" style="font-size:14px">Each agent's default model and effort. A task can still pick its own model.</div>
+    <div class="agent">
+      <div class="agent-top"><strong class="wide">Work at the same time</strong></div>
+      <div class="agent-status">Different agents can work at once, one task each. Extra runs also wait while
+        the server is busy, so the league always has room.</div>
+      <div class="efforts" id="parallel" style="margin-top:10px"></div>
+    </div>
+    <div class="steel" style="font-size:14px;margin-top:16px">Each agent's default model and effort. A task can still pick its own model.</div>
     <div id="agent-cards"></div>
     <div class="howto">To add another agent, install its CLI in <code>Dockerfile.hub</code> and add it to
       <code>hub/agents.yaml</code>, then sign it in once on the server. HUB.md, "Add an agent", has the steps.</div>
@@ -367,13 +383,14 @@ $("#new").onsubmit = async ev => {
     if (mode === "task") {
       const r = await api("/hub/api/tasks", { method: "POST", body: JSON.stringify({
         title: $("#title").value, body: $("#body").value, done_when: $("#done").value,
-        agent: pick.builder, model: modelPick.builder, reviewer: pick.reviewer, reviewer_model: modelPick.reviewer }) });
+        agent: pick.builder, model: modelPick.builder, reviewer: pick.reviewer, reviewer_model: modelPick.reviewer,
+        auto_merge: $("#automerge").checked }) });
       msg.className = "formmsg ok"; msg.textContent = `Task #${r.id} started.`;
       $("#title").value = $("#body").value = $("#done").value = ""; open.add(`t${r.id}`);
     } else {
       const r = await api("/hub/api/plans", { method: "POST", body: JSON.stringify({
         request: $("#request").value, manager: pick.manager, manager_model: modelPick.manager,
-        reviewer: pick.reviewer, reviewer_model: modelPick.reviewer }) });
+        reviewer: pick.reviewer, reviewer_model: modelPick.reviewer, auto_merge: $("#automerge").checked }) });
       msg.className = "formmsg ok"; msg.textContent = `${agentOf(pick.manager).label} is planning. You approve the plan before anything is built.`;
       $("#request").value = ""; open.add(`p${r.id}`);
     }
@@ -398,16 +415,21 @@ function renderCrew() {
 }
 const VERB = { build: "is building", fix: "is fixing", review: "is reviewing", manage: "is planning", checks: "is running the tests for" };
 function renderNow() {
-  const box = $("#now"); const r = state.running;
-  if (!r) { box.hidden = true; return; }
-  box.hidden = false; box.replaceChildren(); box.style.setProperty("--agent", agentOf(r.agent).color);
-  const head = el("div", "now-head");
-  const live = el("span", "live"); live.append(el("span", "dot"), "Running now");
-  head.append(live, el("strong", "wide", r.label + (r.model ? ` (${r.model})` : "")),
-              el("span", "what", `${VERB[r.role] || "is working on"} “${r.title}”`),
-              el("span", "steel", ago(r.started)));
-  const pre = el("pre", "mono", r.log || "Starting…");
-  box.append(head, pre); pre.scrollTop = pre.scrollHeight;
+  const box = $("#now"); const runs = state.running || [];
+  if (!runs.length) { box.hidden = true; return; }
+  box.hidden = false; box.replaceChildren();
+  runs.forEach(r => {
+    const sec = el("section", "now"); sec.style.setProperty("--agent", agentOf(r.agent).color);
+    const head = el("div", "now-head");
+    const live = el("span", "live"); live.append(el("span", "dot"), "Running now");
+    head.append(live, el("strong", "wide", r.label + (r.model ? ` (${r.model})` : "")),
+                el("span", "what", `${VERB[r.role] || "is starting on"} “${r.title}”`),
+                el("span", "steel", ago(r.started)));
+    const pre = el("pre", "mono", r.log || "Starting…");
+    sec.append(head, pre); box.append(sec); pre.scrollTop = pre.scrollHeight;
+  });
+  if (state.held_back && state.held_back !== "limit")
+    box.append(el("div", "held", `More work is waiting: the server is busy (${state.held_back}), so it starts when there's room.`));
 }
 
 // ---------------------------------------------------------------- the rail
@@ -489,8 +511,13 @@ function taskCard(t, g) {
   line.append(tag(t.agent, t.model), el("span", "arrow", "→"), tag(t.reviewer || "claude", t.reviewer_model));
   if (t.plan_id) line.append(el("span", "steel", `plan ${t.plan_id}, step ${t.plan_order + 1}`));
   if (t.round) line.append(el("span", "steel", `round ${t.round}`));
+  if (t.auto_merge) line.append(el("span", "tag-auto", "merges itself"));
   line.append(el("span", "steel", ago(t.updated_at)));
   let stateText = SAY[t.status] || t.status;
+  if (t.status === "waiting" && t.after && t.after.length) {
+    const steps = t.after.map(id => { const x = state.tasks.find(o => o.id === id); return x ? x.plan_order + 1 : "?"; });
+    stateText = `Waits for step ${steps.join(" and ")}`;
+  }
   if (t.status === "merged" && t.deploy) stateText = { pending: "Deploying…", success: "Live", failure: "Deploy failed", unknown: "Merged" }[t.deploy];
   const { card, body } = shell(id, g, t.title, line, stateText, railFor(t));
   if (open.has(id)) loadTask(t.id, body);
@@ -553,6 +580,7 @@ function planCard(p, g) {
   line.append(el("span", "steel", "Plan by"), tag(p.manager, p.manager_model), el("span", "arrow", "→"),
               el("span", "steel", "reviewed by"), tag(p.reviewer, p.reviewer_model));
   if (p.tasks && p.tasks.length) line.append(el("span", "steel", `${p.tasks.length} tasks`));
+  if (p.auto_merge) line.append(el("span", "tag-auto", "merges itself"));
   line.append(el("span", "steel", ago(p.updated_at)));
   const { card, body } = shell(id, g, p.request.split("\n")[0].slice(0, 140), line, SAY[p.status] || p.status);
   if (open.has(id)) loadPlan(p.id, body);
@@ -587,6 +615,9 @@ async function loadPlan(pid, body) {
       c.append(el("div", "t", `Step ${i + 1}: ${t.title}`), el("div", "d", t.details));
       if (t.done_when) c.append(el("div", "d", `Done when: ${t.done_when}`));
       if (t.why) c.append(el("div", "why", `Why ${agentOf(t.builder).label}: ${t.why}`));
+      const after = t.after || (i ? [i - 1] : []);
+      c.append(el("div", "waits", after.length ? `Starts after step ${after.map(j => j + 1).join(" and ")} is merged`
+                                               : "Starts right away"));
       const pair = el("div", "pair"); const w = el("span", "selfwarn");
       const upd = () => { w.textContent = choices[i].builder === choices[i].reviewer ? "reviews its own work" : ""; };
       pair.append("Builder", sel(choices[i].builder, v => { choices[i].builder = v; upd(); }),
@@ -595,7 +626,8 @@ async function loadPlan(pid, body) {
     });
     const notes = el("textarea"); notes.placeholder = "Want a different plan? Tell the manager what to change";
     const acts = el("div", "actions");
-    const ok = el("button", "btn go", "Approve and start step 1");
+    const first = (p.tasks || []).filter((t, i) => !(t.after || (i ? [i - 1] : [])).length).length;
+    const ok = el("button", "btn go", first > 1 ? `Approve and start ${first} steps` : "Approve and start step 1");
     ok.onclick = () => act(`/hub/api/plans/${p.id}/approve`, { tasks: choices }, "Approved. Step 1 is starting.");
     const ch = el("button", "btn", "Ask for changes");
     ch.onclick = () => act(`/hub/api/plans/${p.id}/revise`, { notes: notes.value }, "Sent back to the manager.");
@@ -634,7 +666,21 @@ function openAgents() { renderAgentCards(); $("#agents-sheet").showModal(); }
 $("#open-agents").onclick = openAgents;
 $("#close-agents").onclick = () => $("#agents-sheet").close();
 
+function renderParallel() {
+  const row = $("#parallel"); row.replaceChildren();
+  [1, 2, 3].forEach(n => {
+    const b = el("button", null, n === 1 ? "1 at a time" : `Up to ${n}`); b.type = "button";
+    b.setAttribute("aria-pressed", state.max_parallel === n);
+    b.onclick = async () => {
+      try { await api("/hub/api/settings", { method: "POST", body: JSON.stringify({ max_parallel: n }) }); await refresh(); renderParallel(); }
+      catch (e) { alert(e.message); }
+    };
+    row.append(b);
+  });
+}
+
 function renderAgentCards() {
+  renderParallel();
   const box = $("#agent-cards"); box.replaceChildren();
   state.agents.forEach(a => {
     const card = el("div", "agent");
