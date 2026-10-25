@@ -9,6 +9,7 @@ import pytest
 
 from arena.sandbox.runner import PriceDataFile, SandboxLimits, child_env, run_code
 
+
 @pytest.fixture(autouse=True)
 def _lockdown_only_where_supported(monkeypatch):
     """CI/dev kernels without Landlock would make every run refuse."""
