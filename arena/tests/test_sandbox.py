@@ -9,6 +9,14 @@ import pytest
 
 from arena.sandbox.runner import PriceDataFile, SandboxLimits, child_env, run_code
 
+@pytest.fixture(autouse=True)
+def _lockdown_only_where_supported(monkeypatch):
+    """CI/dev kernels without Landlock would make every run refuse."""
+    from arena.sandbox import lockdown
+    if sys.platform.startswith("linux") and lockdown.landlock_abi() < 1:
+        monkeypatch.setenv("ARENA_SANDBOX_LOCKDOWN", "off")
+
+
 UNIVERSE = {"AAPL": "Information Technology", "SPY": "ETF"}
 FAST = SandboxLimits(cpu_seconds=5, wall_seconds=15)
 

@@ -12,12 +12,15 @@ Lockdown layers, in order:
      If any limit can't be enforced, nothing runs.
   2. We load the price data and import pandas/numpy FIRST, while file access
      is still allowed.
-  3. We install an audit hook. Audit hooks are checked inside CPython's C
+  3. On Linux, Landlock + seccomp (lockdown.py, enforced by the kernel) are
+     applied and PROVEN with probes (no /proc, no writes, no sockets). If that
+     fails we exit with code 86 and never run the agent's code.
+  4. We install an audit hook. Audit hooks are checked inside CPython's C
      code for every file open, socket, subprocess, etc., and can't be
      removed once installed. After this point the process can't open files
      (except reading Python's own library code), use the network, or start
      programs.
-  4. Agent code runs with a restricted __import__ that only allows
+  5. Agent code runs with a restricted __import__ that only allows
      pandas, numpy, math and statistics.
 """
 import builtins
@@ -122,6 +125,17 @@ def _make_audit_hook(read_roots: list[str]):
     return hook
 
 
+def _load_lockdown():
+    """child.py runs with -I (script dir not on sys.path), so load by path."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "arena_sandbox_lockdown", os.path.join(os.path.dirname(os.path.abspath(__file__)), "lockdown.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def _restricted_import(name, globals=None, locals=None, fromlist=(), level=0):
     if level != 0 or name.split(".")[0] not in ALLOWED_IMPORTS:
         raise ImportError(f"import of {name!r} is not allowed; "
@@ -184,6 +198,14 @@ def main() -> None:
     read_roots = sorted({sys.prefix, sys.base_prefix, sys.exec_prefix, sys.base_exec_prefix})
 
     # --- lock down -------------------------------------------------------
+    if job.get("lockdown", sys.platform.startswith("linux")):
+        lockdown = _load_lockdown()
+        try:
+            lockdown.apply_and_verify([os.path.dirname(os.path.dirname(m.__file__)) for m in (np, pd)])
+        except lockdown.LockdownError as e:
+            sys.stderr.write(f"sandbox lockdown failed: {e}\n")
+            sys.stderr.flush()
+            os._exit(lockdown.LOCKDOWN_EXIT_CODE)
     sys.addaudithook(_make_audit_hook(read_roots))
 
     captured = io.StringIO()
