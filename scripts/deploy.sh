@@ -21,11 +21,6 @@ else
 fi
 
 TARGET="${1:-origin/main}"
-# Only a commit id (or origin/main): this is what the GitHub key may pass.
-case "$TARGET" in
-  origin/main) ;;
-  *) printf '%s' "$TARGET" | grep -Eq '^[0-9a-f]{7,40}$' || { echo "Not a commit id: $TARGET"; exit 2; } ;;
-esac
 MAX_WAIT=2400          # seconds to wait for a quiet moment
 
 alert() {   # alert "<level>" "<text>"  (never fails the deploy)
@@ -33,8 +28,14 @@ alert() {   # alert "<level>" "<text>"  (never fails the deploy)
     "import sys; from arena import alerts; alerts.send(sys.argv[2], level=sys.argv[1])" "$1" "$2" >/dev/null 2>&1 || true
 }
 
+# Only a commit id (or origin/main): this is what the GitHub key may pass.
+case "$TARGET" in
+  origin/main) ;;
+  *) printf '%s' "$TARGET" | grep -Eq '^[0-9a-f]{7,40}$' || { echo "Not a commit id: $TARGET"; alert error "Deploy refused: target is not a commit id; nothing deployed."; exit 2; } ;;
+esac
+
 check_deploy_target() {
-  if ! git fetch origin main; then
+  if ! git fetch --quiet origin '+refs/heads/main:refs/remotes/origin/main'; then
     msg="Refusing to deploy $TARGET: git fetch origin main failed"
     echo "$msg"
     alert "error" "$msg"
@@ -81,8 +82,7 @@ while busy; do
 done
 
 PREV=$(git rev-parse HEAD)
-git fetch --quiet origin main
-git checkout --quiet -B main "$TARGET"
+git checkout --quiet -B main "$COMMIT"
 NEW=$(git rev-parse --short HEAD)
 echo "== Deploying $NEW (was $(git rev-parse --short "$PREV"))"
 docker compose up -d --build

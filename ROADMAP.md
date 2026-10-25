@@ -27,7 +27,7 @@ Protect the data and make the system survivable before adding features.
   > Done. `arena/learning/hardlimits.py`, limits in `config/learning.yaml`; checked before every fill (and at decision time), refusals in `rejected_changes` + Telegram. Added now: daily loss limit (5%) and price moved since the analysis (8%). Applies from week 5 with LEARNING_ENABLED=1 (agreed: the next 4-week period). Tests: `test_learning_limits.py`, `test_phase0.py`.
 - [x] **0.4 Kill switch.** One flag (config/DB + admin command) that pauses all trading instantly, per agent or globally, without stopping the rest of the system.
   *Done when:* flipping it stops new orders within one cycle.
-  > Done. `pause` / `resume` with optional `--agent`, dashboard admin endpoint `?agent=`. Engine stop-losses keep running (they only reduce risk). Telegram on every flip.
+  > Done. `pause` / `resume` support a global pause or individual agents via `--agent` and the dashboard admin endpoint's `?agent=`. Emergency `halt` (#39) sets the global pause, blocks Alpaca access, cancels open paper orders and alerts. Global `resume` lifts the halt and global pause; individual agent pause settings stay unchanged. Protective ledger exits continue. Telegram on every flip.
 - [x] **0.5 Phone alerts (Telegram bot).** Notify on: crash/restart, failed order, guardrail rejection, drawdown past threshold, missed scheduled job, weekly winner.
   *Done when:* each alert type has fired once in testing.
   > Done. Existing: crash/restart, failed jobs (each attempt + give-up), failed turns, mirror order rejections, weekly winner, daily/weekly status at 08:00. Added: guardrail rejection, strategy drawdown limit, kill switch. A job missed because the server was down is caught by the outside monitor (0.9).
@@ -45,6 +45,7 @@ Protect the data and make the system survivable before adding features.
   > Live (2026-10-10): the scheduler pings Healthchecks.io every 5 min (`/fail` on database/disk/Alpaca problems; a test `/fail` ping went through). UptimeRobot watches https://databasedstrategy.com every 5 min. Stop test passed: engine stopped 17:36 ET, Healthchecks.io went down at 17:48 (15 min after the last ping) and up at 17:53 when it restarted. CPU/RAM metrics not added.
 - [x] **0.10 CI/CD.** GitHub Actions: lint + tests on push; on merge to `main`, deploy to the VPS (pull, rebuild, restart, health check, roll back on failure).
   *Done when:* a merged change reaches production with no manual SSH.
+  > Done. Deploy accepts only commits on fetched origin/main and checks out the exact verified commit.
   > Code done: `.github/workflows/ci.yml` (ruff + tests; deploy on main) and `scripts/deploy.sh` (waits for a quiet moment, rebuild, health check, automatic rollback, Telegram). Live (2026-10-10): private repo danielratz123-hub/ai-trading-league; the server pulls with a read-only deploy key; GitHub's key may only run `scripts/deploy.sh` (forced command). First automatic deploy of b74fbc8 reached production with no manual SSH. Production branch is now `main`.
 
 ---

@@ -73,7 +73,7 @@ def _pause_key(agent_id: str | None) -> str:
 
 def is_paused(conn, agent_id: str | None = None) -> bool:
     """Globally paused, or (with agent_id) that agent paused or the league paused."""
-    keys = ["paused"] + ([_pause_key(agent_id)] if agent_id else [])
+    keys = ["paused", "halted"] + ([_pause_key(agent_id)] if agent_id else [])
     rows = conn.execute(f"SELECT value FROM league_state WHERE key IN ({','.join('?' * len(keys))})", keys).fetchall()
     return any(r[0] == "1" for r in rows)
 
@@ -96,6 +96,55 @@ def set_paused(conn, paused: bool, agent_id: str | None = None) -> None:
         log_event(conn, "info", "league", f"{who} {'paused' if paused else 'resumed'}")
     alerts.send(f"Kill switch: {'the whole league' if agent_id is None else agent_id} "
                 f"{'PAUSED' if paused else 'resumed'}.", level="warning" if paused else "good")
+
+
+def is_halted(conn) -> bool:
+    """Missing key means normal operation on databases predating the halt switch."""
+    row = conn.execute("SELECT value FROM league_state WHERE key='halted'").fetchone()
+    if row and row[0] not in ("0", "1"):
+        raise LeagueError("Invalid emergency halt flag")
+    return bool(row and row[0] == "1")
+
+
+def set_halted(conn, halted: bool) -> None:
+    with transaction(conn):
+        conn.execute("INSERT OR REPLACE INTO league_state(key, value) VALUES ('halted', ?)",
+                     ("1" if halted else "0",))
+
+
+def resume(conn) -> None:
+    """Lift the emergency halt and global pause; preserve individual pauses."""
+    with transaction(conn):
+        set_halted(conn, False)
+        set_paused(conn, False)
+
+
+def halt(conn) -> dict:
+    """Persist the emergency stop before attempting every paper cancellation."""
+    from . import mirror
+
+    with transaction(conn):
+        set_paused(conn, True)
+        set_halted(conn, True)
+    cancelled, errors = [], {}
+    for agent in ledger.agent_ids(conn):
+        try:
+            # Deliberately bypass brokers_for_each: only cancellation is allowed.
+            broker = mirror.AlpacaPaperBroker(*mirror.keys_for(agent))
+            results = broker.cancel_all_orders()
+            failures = [r for r in (results or []) if not 200 <= int(r.status) < 300]
+            if failures:
+                errors[agent] = "Some open orders could not be cancelled"
+            else:
+                cancelled.append(agent)
+        except Exception as exc:  # one unavailable account must not stop the others
+            # Exception text can include broker credentials or request URLs.
+            errors[agent] = f"Cancellation failed ({type(exc).__name__})"
+    alerts.send("Emergency HALT: all agents paused; Alpaca mirror blocked. "
+                f"Open orders cancelled for: {', '.join(cancelled) or 'none'}. "
+                + " ".join(f"{a}: {e}." for a, e in errors.items()), level="error")
+    return {"halted": is_halted(conn), "paused": is_paused(conn),
+            "cancelled": cancelled, "errors": errors}
 
 
 def _require_running(conn) -> None:
