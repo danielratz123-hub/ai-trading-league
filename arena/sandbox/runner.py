@@ -147,12 +147,13 @@ def _lockdown_refused(stderr: bytes) -> SandboxResult:
     lines = stderr.decode("utf-8", errors="replace").strip().splitlines()
     reason = lines[-1][:300] if lines else "sandbox lockdown failed (no reason given)"
     log.error("sandbox refused to run agent code: %s", reason)
-    # Same reason at most once per hour, so a broken sandbox doesn't spam.
+    # At most once per hour, so a broken sandbox doesn't spam. The raw reason
+    # stays in the log only: it can hold paths.
     try:
         from arena import alerts
-        alerts.send(f"Sandbox refused to run agent code (kernel lockdown failed).\n{reason}\n"
+        alerts.send("Sandbox refused to run agent code (kernel lockdown failed).\n"
                     "Agent code is NOT run unlocked. Check the server kernel (Landlock needs "
-                    "Linux 5.13+).", level="error", key="sandbox-lockdown:" + reason,
+                    "Linux 5.13+).", level="error", key="sandbox-lockdown",
                     every=timedelta(hours=1))
     except Exception:  # noqa: BLE001 - alerts must never break the caller
         log.exception("could not send the sandbox lockdown alert")
