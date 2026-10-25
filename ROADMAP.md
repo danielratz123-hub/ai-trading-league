@@ -27,6 +27,7 @@ Protect the data and make the system survivable before adding features.
   > Done. `arena/learning/hardlimits.py`, limits in `config/learning.yaml`; checked before every fill (and at decision time), refusals in `rejected_changes` + Telegram. Added now: daily loss limit (5%) and price moved since the analysis (8%). Applies from week 5 with LEARNING_ENABLED=1 (agreed: the next 4-week period). Tests: `test_learning_limits.py`, `test_phase0.py`.
 - [x] **0.4 Kill switch.** One flag (config/DB + admin command) that pauses all trading instantly, per agent or globally, without stopping the rest of the system.
   *Done when:* flipping it stops new orders within one cycle.
+  > Done (#39). Emergency `halt` / global `resume` also block Alpaca access, cancel paper orders and alert; protective ledger exits continue. Deploy accepts only commits on fetched origin/main.
   > Done. `pause` / `resume` with optional `--agent`, dashboard admin endpoint `?agent=`. Engine stop-losses keep running (they only reduce risk). Telegram on every flip.
 - [x] **0.5 Phone alerts (Telegram bot).** Notify on: crash/restart, failed order, guardrail rejection, drawdown past threshold, missed scheduled job, weekly winner.
   *Done when:* each alert type has fired once in testing.

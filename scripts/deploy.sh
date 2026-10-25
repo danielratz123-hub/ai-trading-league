@@ -17,17 +17,18 @@ set -eu
 cd "$(dirname "$0")/.."
 
 TARGET="${1:-origin/main}"
-# Only a commit id (or origin/main): this is what the GitHub key may pass.
-case "$TARGET" in
-  origin/main) ;;
-  *) printf '%s' "$TARGET" | grep -Eq '^[0-9a-f]{7,40}$' || { echo "Not a commit id: $TARGET"; exit 2; } ;;
-esac
 MAX_WAIT=2400          # seconds to wait for a quiet moment
 
 alert() {   # alert "<level>" "<text>"  (never fails the deploy)
   docker compose exec -T engine python -c \
     "import sys; from arena import alerts; alerts.send(sys.argv[2], level=sys.argv[1])" "$1" "$2" >/dev/null 2>&1 || true
 }
+
+# Only a commit id (or origin/main): this is what the GitHub key may pass.
+case "$TARGET" in
+  origin/main) ;;
+  *) printf '%s' "$TARGET" | grep -Eq '^[0-9a-f]{7,40}$' || { echo "Deploy refused: not a commit id."; alert error "Deploy refused: target is not a commit id; nothing deployed."; exit 2; } ;;
+esac
 
 busy() {    # a job is running, or we're near the opening execute
   hm=$(TZ=America/New_York date +%H%M)
@@ -50,6 +51,20 @@ healthy() {
   return 1
 }
 
+# Validate before waiting, checking out, or rebuilding anything. Resolve to a
+# full commit so checkout uses exactly the object whose ancestry was checked.
+git fetch --quiet origin '+refs/heads/main:refs/remotes/origin/main' || {
+  echo "Deploy refused: could not fetch origin/main."
+  alert error "Deploy refused: could not fetch origin/main; nothing deployed."
+  exit 1
+}
+if ! VERIFIED=$(git rev-parse --verify "$TARGET^{commit}" 2>/dev/null) ||
+   ! git merge-base --is-ancestor "$VERIFIED" origin/main; then
+  echo "Deploy refused: $TARGET is not a commit on origin/main."
+  alert error "Deploy refused: $TARGET is not a commit on origin/main; nothing deployed."
+  exit 1
+fi
+
 waited=0
 while busy; do
   [ "$waited" -ge "$MAX_WAIT" ] && { echo "Still busy after ${MAX_WAIT}s; not deploying. Re-run the workflow later."; exit 75; }
@@ -58,8 +73,7 @@ while busy; do
 done
 
 PREV=$(git rev-parse HEAD)
-git fetch --quiet origin main
-git checkout --quiet -B main "$TARGET"
+git checkout --quiet -B main "$VERIFIED"
 NEW=$(git rev-parse --short HEAD)
 echo "== Deploying $NEW (was $(git rev-parse --short "$PREV"))"
 docker compose up -d --build

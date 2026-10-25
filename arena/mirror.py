@@ -36,16 +36,41 @@ import math
 import os
 import sqlite3
 import uuid
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Protocol
 
 from . import ledger, scoring
-from .config import MissingKeyError, require_env
+from .config import SETTINGS, MissingKeyError, require_env
 from .db import log_event, transaction
 from .prices import get_price, price_on_or_before
 
 MIN_ORDER_VALUE = 1.0      # Alpaca's minimum notional for fractional orders
 
+
+
+class MirrorHalted(RuntimeError):
+    """Alpaca access refused by the emergency switch (including read failures)."""
+
+
+def require_not_halted(conn: sqlite3.Connection | None = None) -> None:
+    from .league import is_halted
+    owned = None
+    try:
+        if conn is None:
+            # Read-only: a missing/unreadable database must never create a fresh,
+            # apparently unhalted store. Close before any broker network call.
+            path = Path(os.getenv("ARENA_DB", str(SETTINGS.db_path))).resolve()
+            owned = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)
+            conn = owned
+        halted = is_halted(conn)
+    except Exception as exc:
+        raise MirrorHalted("Alpaca refused: emergency halt flag could not be read") from exc
+    finally:
+        if owned is not None:
+            owned.close()
+    if halted:
+        raise MirrorHalted("Alpaca refused: emergency halt is active; run resume to lift it")
 
 
 class Broker(Protocol):
@@ -86,12 +111,15 @@ class AlpacaPaperBroker:
                                     paper=True)   # never a live account
 
     def account_id(self) -> str:
+        require_not_halted()
         return str(self.client.get_account().account_number)
 
     def equity(self) -> float:
+        require_not_halted()
         return float(self.client.get_account().equity)
 
     def positions(self) -> dict[str, float]:
+        require_not_halted()
         out = {}
         for p in self.client.get_all_positions():
             q = float(p.qty)
@@ -101,6 +129,7 @@ class AlpacaPaperBroker:
         return out
 
     def submit(self, ticker: str, qty: float, label: str = "") -> str:
+        require_not_halted()
         from alpaca.trading.enums import OrderSide, TimeInForce
         from alpaca.trading.requests import MarketOrderRequest
         order = self.client.submit_order(MarketOrderRequest(
@@ -109,6 +138,10 @@ class AlpacaPaperBroker:
             # Shown in Alpaca's order details: which agent(s) this order is for.
             client_order_id=f"arena-{label or 'mirror'}-{uuid.uuid4().hex[:10]}"))
         return str(order.id)
+
+    def cancel_all_orders(self):
+        """The sole Alpaca call allowed during a halt: cancel, never submit."""
+        return self.client.cancel_orders()
 
 
 @dataclass
@@ -170,6 +203,7 @@ def plan(weights: dict[str, float], prices: dict[str, float], paper_equity: floa
 def sync(conn: sqlite3.Connection, d: str, broker: Broker | None = None, dry_run: bool = False,
          agent: str | None = None) -> list[MirrorLine]:
     """Mirror one agent (default: the leader) into a paper account at date d's prices."""
+    require_not_halted(conn)
     who = agent or leader(conn)
     if who is None:
         log_event(conn, "info", "mirror", f"{d}: no single leader; paper account left unchanged")
@@ -212,10 +246,12 @@ def sync(conn: sqlite3.Connection, d: str, broker: Broker | None = None, dry_run
     return lines
 
 
-def brokers_for_each(agent_ids: list[str], skipped: list[str] | None = None) -> dict[str, "AlpacaPaperBroker"]:
+def brokers_for_each(agent_ids: list[str], skipped: list[str] | None = None,
+                     conn: sqlite3.Connection | None = None) -> dict[str, "AlpacaPaperBroker"]:
     """One paper account per agent, refusing if two agents share one (their
     positions would mix and both mirrors would fight over them). Agents with
     no account set up yet are left out (and named in `skipped`)."""
+    require_not_halted(conn)
     brokers = {}
     for a in agent_ids:
         try:
@@ -237,6 +273,7 @@ def brokers_for_each(agent_ids: list[str], skipped: list[str] | None = None) -> 
 def sync_all(conn: sqlite3.Connection, d: str, dry_run: bool = False,
              brokers: dict | None = None) -> dict[str, list[MirrorLine]]:
     """Run the mirror the way MIRROR_MODE says. Returns {agent: lines}."""
+    require_not_halted(conn)
     m = mode()
     if m == "off":
         return {}
@@ -247,7 +284,7 @@ def sync_all(conn: sqlite3.Connection, d: str, dry_run: bool = False,
         return {who: sync(conn, d, (brokers or {}).get(who), dry_run, agent=who)} if who else {}
     agents = ledger.agent_ids(conn)
     skipped: list[str] = []
-    brokers = brokers or brokers_for_each(agents, skipped)
+    brokers = brokers or brokers_for_each(agents, skipped, conn)
     if skipped:
         log_event(conn, "info", "mirror", f"{d}: no paper account set up for {', '.join(skipped)}; skipped")
     return {a: sync(conn, d, brokers[a], dry_run, agent=a) for a in agents if a in brokers}
@@ -255,6 +292,7 @@ def sync_all(conn: sqlite3.Connection, d: str, dry_run: bool = False,
 
 def check_accounts(agent_ids: list[str]) -> dict:
     """For the Setup page: can each agent's paper account be reached?"""
+    require_not_halted()
     out = {}
     skipped: list[str] = []
     try:
@@ -295,6 +333,7 @@ def sync_combined(conn: sqlite3.Connection, d: str, broker: Broker | None = None
     MIRROR_SIZING=exact, each agent's own league equity). Sends ONE net order
     per ticker (so the agents never trade against each other inside the
     account) and records each agent's part of it."""
+    require_not_halted(conn)
     agents = ledger.agent_ids(conn)
     if not agents:
         return {}
@@ -393,6 +432,7 @@ def reconcile(conn: sqlite3.Connection, broker: Broker | None = None) -> dict:
     """Compare the paper account with what the league says it should hold.
     combined mode: per ticker, the sum of every agent's recorded share
     (mirror_holdings). Returns {'checked': bool, 'mismatches': [...], ...}."""
+    require_not_halted(conn)
     m = mode()
     if m != "combined":
         return {"checked": False, "mode": m,

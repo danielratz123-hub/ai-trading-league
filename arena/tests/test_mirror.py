@@ -123,7 +123,7 @@ def test_each_mode_mirrors_every_agent_into_its_own_account(conn, monkeypatch):
     assert dict(brokers["gpt"].orders)["XOM"] == pytest.approx(0.2 * 50_000 / 50, rel=0.01)
 
 
-def test_two_agents_cannot_share_one_paper_account(monkeypatch):
+def test_two_agents_cannot_share_one_paper_account(conn, monkeypatch):
     class SameAccount:
         def __init__(self, *a):
             pass
@@ -133,7 +133,7 @@ def test_two_agents_cannot_share_one_paper_account(monkeypatch):
     monkeypatch.setattr(mirror, "AlpacaPaperBroker", SameAccount)
     monkeypatch.setattr(mirror, "keys_for", lambda a: ("k", "s"))
     with pytest.raises(ValueError, match="same Alpaca paper account"):
-        mirror.brokers_for_each(["claude", "gpt"])
+        mirror.brokers_for_each(["claude", "gpt"], conn=conn)
 
 
 def test_mirror_mode_and_keys(monkeypatch):

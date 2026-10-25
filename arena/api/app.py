@@ -1,8 +1,8 @@
 """Read-only dashboard API (FastAPI) + the static dashboard itself.
 
 Run locally:   python -m arena.main serve        -> http://127.0.0.1:8000
-Every endpoint is GET and opens the database read-only, except the two
-admin actions (pause / resume), which need the ADMIN_TOKEN from .env.
+Every endpoint is GET and opens the database read-only, except the
+admin actions (pause / resume / halt), which need the ADMIN_TOKEN from .env.
 Everything except /login and /healthz needs a signed-in session when a
 dashboard password is set, and always on the server (see auth.py).
 """
@@ -214,6 +214,14 @@ def create_app() -> FastAPI:
     def lab_overview(conn=Depends(read_conn)):
         return lab.overview(conn)
 
+    @app.post("/api/admin/halt", dependencies=[Depends(require_admin)])
+    def halt():
+        conn = connect(db_path())
+        try:
+            return league.halt(conn)
+        finally:
+            conn.close()
+
     @app.post("/api/admin/pause", dependencies=[Depends(require_admin)])
     def pause(agent: str | None = Query(None)):
         return _set_paused(True, agent)
@@ -237,7 +245,10 @@ def _set_paused(paused: bool, agent: str | None = None) -> dict:
     try:
         if agent is not None and agent not in ledger.agent_ids(conn):
             raise HTTPException(404, f"Unknown agent {agent!r}")
-        league.set_paused(conn, paused, agent)
+        if not paused and agent is None:
+            league.resume(conn)
+        else:
+            league.set_paused(conn, paused, agent)
         return {"paused": league.is_paused(conn), "paused_agents": league.paused_agents(conn)}
     finally:
         conn.close()

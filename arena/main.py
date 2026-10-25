@@ -24,6 +24,8 @@ League (times are US Eastern)
     replan           redo the first week's decisions (only before any trade) with the latest data
     trade-now        during market hours: fill the waiting week now at the latest price
     complete-now     during market hours: buy planned positions that had no price, fix negative cash
+    halt             pause all agents, block Alpaca, cancel open paper orders, alert
+    resume [--halt]  lift emergency halt and global pause (--agent: only individual pause)
     pause / resume   the kill switch: stop / restart decide and execute (--agent X: one agent only)
     app              the easy way: dashboard + setup page, opens your browser (start.cmd runs this)
     serve            run the dashboard + read-only API on http://127.0.0.1:8000
@@ -361,13 +363,20 @@ def cmd_pause(conn, args) -> None:
           "running so open positions stay protected.)")
 
 
+def cmd_halt(conn, args) -> None:
+    if args.dry_run:
+        print("Emergency halt skipped in --dry-run (would cancel paper orders).")
+        return
+    _print_json(league.halt(conn))
+
+
 def cmd_resume(conn, args) -> None:
     if args.agent:
         _known_agent(conn, args.agent)
         league.set_paused(conn, False, args.agent)
         print(f"{args.agent} resumed.")
         return
-    league.set_paused(conn, False)
+    league.resume(conn)
     print("League resumed." + (f" Still paused individually: {', '.join(league.paused_agents(conn))}."
                                if league.paused_agents(conn) else ""))
 
@@ -391,6 +400,9 @@ def _maybe_mirror(conn, d, args) -> None:
             notes = "; ".join(f"{l.ticker}: {l.note}" for l in lines if l.note)
             print(f"Paper mirror ({agent}): {n} order(s) sent" + (f"; notes: {notes}" if notes else ""))
             problems += [f"{agent} {l.ticker}: {l.note}" for l in lines if "rejected" in (l.note or "")]
+    except mirror.MirrorHalted as exc:
+        logging.getLogger(__name__).warning("%s", exc)
+        return
     except Exception as e:  # noqa: BLE001 - the league itself already executed fine
         print(f"Paper mirror failed (league unaffected): {e}")
         problems.append(f"sync failed: {type(e).__name__}: {str(e)[:300]}")
@@ -444,7 +456,11 @@ def cmd_mirror(conn, args) -> None:
     if m == "off":
         sys.exit("The paper mirror is off. Turn it on in Setup (step 6) or set MIRROR_MODE in .env.")
     d = args.date or _mirror_date(conn)
-    results = mirror.sync_all(conn, d, dry_run=not args.apply)
+    try:
+        results = mirror.sync_all(conn, d, dry_run=not args.apply)
+    except mirror.MirrorHalted as exc:
+        logging.getLogger(__name__).warning("%s", exc)
+        return
     if not results:
         print("Nothing to mirror (no single leader yet)." if m == "leader" else "No agents yet.")
     for agent, lines in results.items():
@@ -592,6 +608,9 @@ def cmd_reconcile(conn, args) -> None:
     from . import alerts, mirror
     try:
         res = mirror.reconcile(conn)
+    except mirror.MirrorHalted as exc:
+        logging.getLogger(__name__).warning("%s", exc)
+        return
     except Exception as e:  # noqa: BLE001 - report clearly; the scheduler retries
         alerts.send(f"Alpaca API error: reconciliation could not read the paper account: "
                     f"{type(e).__name__}: {str(e)[:300]}", level="error", key="reconcile-error")
@@ -838,6 +857,7 @@ COMMANDS = {
     "trade-now": cmd_trade_now,
     "complete-now": cmd_complete_now,
     "simulate": cmd_simulate,
+    "halt": cmd_halt,
     "pause": cmd_pause,
     "resume": cmd_resume,
     "app": cmd_app,
@@ -918,12 +938,15 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--with-week", dest="week_too", action="store_true",
                         help="staging: also run the weekly review after the day")
     parser.add_argument("--agent", help="pause / resume: just this agent (the kill switch per agent)")
+    parser.add_argument("--halt", action="store_true", help="resume: lift the emergency halt and global pause")
     parser.add_argument("--db", default=str(SETTINGS.db_path), help="database path")
     args = parser.parse_args(argv)
+    if args.halt and (args.command != "resume" or args.agent):
+        parser.error("--halt requires resume without --agent")
     if args.command == "review-dry-run":
         args.dry_run = True                 # always on a throwaway copy
     import os
-    os.environ.setdefault("ARENA_DB", str(Path(args.db).resolve()))   # where alerts keep their state
+    os.environ["ARENA_DB"] = str(Path(args.db).resolve())   # alerts and the mirror guard use this DB
     from . import logs
     logs.setup(logging.WARNING)            # JSON with a run_id on the server (arena/logs.py)
 
