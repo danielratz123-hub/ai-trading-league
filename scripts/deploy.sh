@@ -14,7 +14,11 @@
 # 5. unhealthy -> rolls back to the previous commit, rebuilds, alerts, exit 1
 # Telegram gets the result either way.
 set -eu
-cd "$(dirname "$0")/.."
+if [ "${DEPLOY_CHECK_ONLY:-0}" = "1" ]; then
+  cd "${DEPLOY_REPO:-.}"
+else
+  cd "${DEPLOY_REPO:-$(dirname "$0")/..}"
+fi
 
 TARGET="${1:-origin/main}"
 # Only a commit id (or origin/main): this is what the GitHub key may pass.
@@ -28,6 +32,25 @@ alert() {   # alert "<level>" "<text>"  (never fails the deploy)
   docker compose exec -T engine python -c \
     "import sys; from arena import alerts; alerts.send(sys.argv[2], level=sys.argv[1])" "$1" "$2" >/dev/null 2>&1 || true
 }
+
+check_deploy_target() {
+  if ! git fetch origin main; then
+    msg="Refusing to deploy $TARGET: git fetch origin main failed"
+    echo "$msg"
+    alert "error" "$msg"
+    exit 3
+  fi
+  if ! COMMIT=$(git rev-parse --verify "$TARGET^{commit}" 2>/dev/null) \
+     || ! git merge-base --is-ancestor "$COMMIT" origin/main; then
+    msg="Refusing to deploy $TARGET: it is not on origin/main"
+    echo "$msg"
+    alert "error" "$msg"
+    exit 3
+  fi
+}
+
+check_deploy_target
+[ "${DEPLOY_CHECK_ONLY:-0}" = "1" ] && exit 0
 
 busy() {    # a job is running, or we're near the opening execute
   hm=$(TZ=America/New_York date +%H%M)
