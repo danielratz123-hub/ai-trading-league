@@ -37,3 +37,4 @@ backups/
 *.tar.gz
 *.tgz
 *.zip
+client_secret*.json
