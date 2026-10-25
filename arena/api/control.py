@@ -278,6 +278,8 @@ def save_env(updates: dict):
 @router.post("/test-alpaca")
 def test_alpaca():
     try:
+        from .. import mirror
+        mirror.require_not_halted()
         from alpaca.trading.client import TradingClient
         key, secret = os.getenv("ALPACA_API_KEY", ""), os.getenv("ALPACA_SECRET_KEY", "")
         if not key or not secret:
@@ -297,7 +299,10 @@ def test_mirror():
     agents = list(SETTINGS.agents)
     if mirror.mode() in ("leader", "combined"):
         agents = agents[:1]       # one account; any agent id tests the main keys
-    return mirror.check_accounts(agents)
+    try:
+        return mirror.check_accounts(agents)
+    except mirror.MirrorHalted as e:
+        return {"ok": False, "message": str(e)}
 
 
 @router.post("/agents/check")

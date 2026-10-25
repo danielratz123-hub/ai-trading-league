@@ -178,3 +178,54 @@ def test_cli_resume_halt_option(halt_db):
     path = halt_db.execute("PRAGMA database_list").fetchone()[2]
     main.main(["resume", "--halt", "--db", path])
     assert not league.is_halted(halt_db) and not league.is_paused(halt_db)
+
+
+@pytest.mark.parametrize("route", ["test-alpaca", "test-mirror"])
+@pytest.mark.parametrize("state", ["halted", "missing", "invalid"])
+def test_setup_alpaca_checks_refuse_without_network(halt_db, monkeypatch, tmp_path, route, state):
+    from alpaca.trading.client import TradingClient
+    from arena.api.app import create_app
+
+    network = Mock(side_effect=AssertionError("Alpaca must not be contacted"))
+    monkeypatch.setattr(TradingClient, "get_account", network)
+    monkeypatch.setattr(mirror, "AlpacaPaperBroker", network)
+    if state == "halted":
+        league.set_halted(halt_db, True)
+    elif state == "missing":
+        monkeypatch.setenv("ARENA_DB", str(tmp_path / "missing.sqlite"))
+    else:
+        halt_db.execute("INSERT OR REPLACE INTO league_state VALUES ('halted', 'broken')")
+        halt_db.commit()
+    client = TestClient(create_app(), base_url="http://localhost", client=("127.0.0.1", 50000))
+    response = client.post(f"/api/control/{route}", headers={"X-Arena-Control": "1"})
+    assert response.status_code == 200
+    result = response.json()
+    assert result["ok"] is False
+    assert "emergency halt" in result["message"]
+    assert ("run resume" if state == "halted" else "could not be read") in result["message"]
+    network.assert_not_called()
+
+
+@pytest.mark.parametrize("route", ["test-alpaca", "test-mirror"])
+def test_setup_alpaca_checks_work_after_resume(halt_db, monkeypatch, route):
+    from alpaca.trading import client as alpaca_client
+    from arena.api.app import create_app
+
+    account = Mock(return_value=SimpleNamespace(status="ACTIVE"))
+    monkeypatch.setattr(alpaca_client, "TradingClient", lambda *a, **kw: SimpleNamespace(get_account=account))
+    monkeypatch.setenv("ALPACA_API_KEY", "fake-key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "fake-secret")
+    monkeypatch.setattr(mirror, "keys_for", lambda a: ("fake-key", "fake-secret"))
+    broker = Mock(account_id=Mock(return_value="fake-account"), equity=Mock(return_value=1000))
+    monkeypatch.setattr(mirror, "AlpacaPaperBroker", lambda *a: broker)
+    league.set_halted(halt_db, True)
+    league.resume(halt_db)
+    client = TestClient(create_app(), base_url="http://localhost", client=("127.0.0.1", 50000))
+    response = client.post(f"/api/control/{route}", headers={"X-Arena-Control": "1"})
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    if route == "test-alpaca":
+        account.assert_called_once_with()
+    else:
+        broker.account_id.assert_called_with()
+        broker.equity.assert_called_once_with()

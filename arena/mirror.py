@@ -36,8 +36,8 @@ import math
 import os
 import sqlite3
 import uuid
-from pathlib import Path
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Protocol
 
 from . import ledger, scoring
@@ -65,12 +65,12 @@ def require_not_halted(conn: sqlite3.Connection | None = None) -> None:
             conn = owned
         halted = is_halted(conn)
     except Exception as exc:
-        raise MirrorHalted("Alpaca refused: emergency halt flag could not be read") from exc
+        raise MirrorHalted("Alpaca access refused: emergency halt flag could not be read") from exc
     finally:
         if owned is not None:
             owned.close()
     if halted:
-        raise MirrorHalted("Alpaca refused: emergency halt is active; run resume to lift it")
+        raise MirrorHalted("Alpaca access refused: emergency halt is active; run resume to lift it")
 
 
 class Broker(Protocol):
