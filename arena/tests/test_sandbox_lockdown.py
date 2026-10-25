@@ -172,7 +172,7 @@ def test_runner_refuses_logs_and_alerts(data, monkeypatch, caplog):
     assert "Landlock is not available" in caplog.text
     (args, kw), = sent
     assert kw["level"] == "error" and kw["every"] == timedelta(hours=1)
-    assert "Landlock is not available" in args[0]
+    assert "kernel lockdown failed" in args[0] and "Landlock is not available" not in args[0]
 
 
 def test_runner_handles_a_real_process_exiting_86(data, monkeypatch):
