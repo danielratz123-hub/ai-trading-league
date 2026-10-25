@@ -22,11 +22,14 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from datetime import timedelta
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
 import pandas as pd
+
+from .lockdown import LOCKDOWN_EXIT_CODE
 
 CHILD = Path(__file__).with_name("child.py")
 log = logging.getLogger("arena.sandbox")
@@ -99,6 +102,7 @@ def run_code(
         "cpu_seconds": limits.cpu_seconds, "mem_mb": limits.mem_mb,
         "max_output": limits.max_output_chars,
         "simulate_limit_failure": _simulate_limit_failure,
+        "lockdown": lockdown_required(),
     }
     proc = subprocess.Popen(
         no_network_prefix() + [sys.executable, "-I", str(CHILD)],
@@ -118,6 +122,8 @@ def run_code(
             _close_handle(job_handle)
 
     text = out.decode("utf-8", errors="replace")
+    if proc.returncode == LOCKDOWN_EXIT_CODE and marker not in text:
+        return _lockdown_refused(err)
     if marker not in text:
         return SandboxResult(False, error=_explain_crash(proc.returncode, err, limits))
     payload = json.loads(text.rsplit(marker, 1)[1].strip().splitlines()[0])
@@ -128,6 +134,31 @@ def run_code(
         weights=payload.get("weights"), series=payload.get("series") or {},
         refused=bool(payload.get("refused")),
     )
+
+
+def lockdown_required() -> bool:
+    """Landlock + seccomp are mandatory on Linux. ARENA_SANDBOX_LOCKDOWN=off
+    is for development only."""
+    return (sys.platform.startswith("linux")
+            and os.environ.get("ARENA_SANDBOX_LOCKDOWN", "").strip().lower() != "off")
+
+
+def _lockdown_refused(stderr: bytes) -> SandboxResult:
+    lines = stderr.decode("utf-8", errors="replace").strip().splitlines()
+    reason = lines[-1][:300] if lines else "sandbox lockdown failed (no reason given)"
+    log.error("sandbox refused to run agent code: %s", reason)
+    # At most once per hour, so a broken sandbox doesn't spam. The raw reason
+    # stays in the log only: it can hold paths.
+    try:
+        from arena import alerts
+        alerts.send("Sandbox refused to run agent code (kernel lockdown failed).\n"
+                    "Agent code is NOT run unlocked. Check the server kernel (Landlock needs "
+                    "Linux 5.13+).", level="error", key="sandbox-lockdown",
+                    every=timedelta(hours=1))
+    except Exception:  # noqa: BLE001 - alerts must never break the caller
+        log.exception("could not send the sandbox lockdown alert")
+    return SandboxResult(False, error=f"Sandbox refused to run: {reason}. The code was not executed.",
+                         refused=True)
 
 
 @lru_cache(maxsize=1)
